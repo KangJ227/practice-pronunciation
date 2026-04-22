@@ -1,0 +1,11 @@
+.next
+node_modules
+.npm-cache
+coverage
+storage
+uploads
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+*.log
