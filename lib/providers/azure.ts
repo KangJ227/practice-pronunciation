@@ -100,30 +100,32 @@ export const fastTranscribeAudio = async (
 ): Promise<FastTranscriptionResult> => {
   const { key, region } = ensureAzureConfig();
   const fileBuffer = await fs.readFile(filePath);
-  const formData = new FormData();
-  formData.append(
-    "audio",
-    new Blob([fileBuffer], { type: inferAudioMime(fileName) }),
-    path.basename(fileName),
-  );
-  formData.append("definition", JSON.stringify({ locales: getFastTranscriptionLocales(locale) }));
+  const definitions = buildFastTranscriptionDefinitions(locale);
+  let raw: Record<string, unknown> | null = null;
+  let lastError: unknown = null;
 
-  const response = await fetch(
-    `${speechHost(region)}/speechtotext/transcriptions:transcribe?api-version=${speechRestVersion}`,
-    {
-      method: "POST",
-      headers: {
-        "Ocp-Apim-Subscription-Key": key,
-      },
-      body: formData,
-    },
-  );
-
-  if (!response.ok) {
-    throw new Error(`Azure transcription failed: ${response.status} ${await response.text()}`);
+  for (const definition of definitions) {
+    try {
+      raw = await submitFastTranscription({
+        key,
+        region,
+        fileBuffer,
+        fileName,
+        definition,
+      });
+      break;
+    } catch (error) {
+      lastError = error;
+      if (!shouldRetryWithoutLocales(error) || definition.locales === undefined) {
+        throw error;
+      }
+    }
   }
 
-  const raw = (await response.json()) as Record<string, unknown>;
+  if (!raw) {
+    throw lastError instanceof Error ? lastError : new Error("Azure transcription failed.");
+  }
+
   const combinedPhrases = Array.isArray(raw.combinedPhrases) ? raw.combinedPhrases : [];
   const phrases = Array.isArray(raw.phrases) ? raw.phrases : [];
   const fullText =
@@ -179,6 +181,136 @@ export const fastTranscribeAudio = async (
     phrases: normalizedPhrases,
     raw,
   };
+};
+
+export const transcribeAudioWithSdk = async (
+  wavFilePath: string,
+  locale = appConfig.locale,
+): Promise<FastTranscriptionResult> => {
+  const { key, region } = ensureAzureConfig();
+  const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(key, region);
+  speechConfig.speechRecognitionLanguage = locale;
+  speechConfig.setProperty(
+    SpeechSDK.PropertyId.SpeechServiceResponse_RequestWordLevelTimestamps,
+    "true",
+  );
+
+  const audioBuffer = await fs.readFile(wavFilePath);
+  const audioConfig = SpeechSDK.AudioConfig.fromWavFileInput(audioBuffer);
+  const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+
+  return await new Promise<FastTranscriptionResult>((resolve, reject) => {
+    const phrases: FastTranscriptionResult["phrases"] = [];
+    const rawPhrases: Record<string, unknown>[] = [];
+    let settled = false;
+
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      recognizer.close();
+      callback();
+    };
+
+    recognizer.recognized = (_sender, event) => {
+      if (event.result.reason !== SpeechSDK.ResultReason.RecognizedSpeech) {
+        return;
+      }
+
+      const parsed = parseSdkRecognitionResult(event.result);
+      if (!parsed) {
+        return;
+      }
+
+      phrases.push(parsed.phrase);
+      rawPhrases.push(parsed.raw);
+    };
+
+    recognizer.canceled = (_sender, event) => {
+      if (!event.errorDetails) {
+        return;
+      }
+
+      settle(() => {
+        reject(new Error(`Azure SDK transcription failed: ${event.errorDetails}`));
+      });
+    };
+
+    recognizer.sessionStopped = () => {
+      recognizer.stopContinuousRecognitionAsync(
+        () =>
+          settle(() => {
+            resolve({
+              fullText: phrases.map((phrase) => phrase.text).join(" ").trim(),
+              durationMilliseconds:
+                phrases.length > 0
+                  ? Math.max(
+                      ...phrases.map((phrase) =>
+                        phrase.offsetMilliseconds !== null &&
+                        phrase.durationMilliseconds !== null
+                          ? phrase.offsetMilliseconds + phrase.durationMilliseconds
+                          : 0,
+                      ),
+                    )
+                  : null,
+              phrases,
+              raw: {
+                provider: "azure-sdk",
+                phrases: rawPhrases,
+              },
+            });
+          }),
+        (error) =>
+          settle(() => {
+            reject(new Error(String(error)));
+          }),
+      );
+    };
+
+    recognizer.startContinuousRecognitionAsync(
+      () => undefined,
+      (error) =>
+        settle(() => {
+          reject(new Error(String(error)));
+        }),
+    );
+  });
+};
+
+const submitFastTranscription = async (input: {
+  key: string;
+  region: string;
+  fileBuffer: Buffer;
+  fileName: string;
+  definition: FastTranscriptionDefinition;
+}) => {
+  const formData = new FormData();
+  const audioBytes = new Uint8Array(input.fileBuffer);
+  formData.append(
+    "audio",
+    new Blob([audioBytes], { type: inferAudioMime(input.fileName) }),
+    path.basename(input.fileName),
+  );
+  formData.append("definition", JSON.stringify(input.definition));
+
+  const response = await fetch(
+    `${speechHost(input.region)}/speechtotext/transcriptions:transcribe?api-version=${speechRestVersion}`,
+    {
+      method: "POST",
+      headers: {
+        "Ocp-Apim-Subscription-Key": input.key,
+      },
+      body: formData,
+    },
+  );
+
+  if (!response.ok) {
+    throw new Error(`Azure transcription failed: ${response.status} ${await response.text()}`);
+  }
+
+  return (await response.json()) as Record<string, unknown>;
 };
 
 export const assessPronunciation = async (
@@ -313,6 +445,33 @@ const toNumber = (value: unknown) => {
   return null;
 };
 
+type FastTranscriptionDefinition = {
+  locales?: string[];
+};
+
+export const buildFastTranscriptionDefinitions = (
+  locale: string,
+): FastTranscriptionDefinition[] => {
+  const locales = getFastTranscriptionLocales(locale);
+  if (locales.length === 0) {
+    return [{}];
+  }
+
+  return [{ locales }, {}];
+};
+
+export const shouldRetryWithoutLocales = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /InvalidLocale|The specified locale is not supported/i.test(message);
+};
+
+export const shouldFallbackToSdkTranscription = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return /InvalidLocale|The specified locale is not supported|InvalidModel|The specified model is not supported/i.test(
+    message,
+  );
+};
+
 const escapeXml = (value: string) =>
   value
     .replaceAll("&", "&amp;")
@@ -321,7 +480,7 @@ const escapeXml = (value: string) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
 
-const inferAudioMime = (fileName: string) => {
+export const inferAudioMime = (fileName: string) => {
   const extension = path.extname(fileName).toLowerCase();
 
   if (extension === ".mp3") {
@@ -340,9 +499,56 @@ const inferAudioMime = (fileName: string) => {
     return "audio/ogg";
   }
 
+  if (extension === ".opus") {
+    return "audio/ogg";
+  }
+
   if (extension === ".webm") {
     return "audio/webm";
   }
 
   return "application/octet-stream";
+};
+
+const parseSdkRecognitionResult = (result: SpeechSDK.SpeechRecognitionResult) => {
+  const rawJson =
+    result.properties.getProperty(SpeechSDK.PropertyId.SpeechServiceResponse_JsonResult) ?? "{}";
+  const raw = JSON.parse(rawJson) as Record<string, unknown>;
+  const best =
+    Array.isArray(raw.NBest) && raw.NBest[0] && typeof raw.NBest[0] === "object"
+      ? (raw.NBest[0] as Record<string, unknown>)
+      : null;
+  const words = Array.isArray(best?.Words) ? best.Words : [];
+  const text = String(raw.DisplayText ?? result.text ?? "").trim();
+
+  if (!text) {
+    return null;
+  }
+
+  return {
+    phrase: {
+      text,
+      offsetMilliseconds: ticksToMilliseconds(raw.Offset ?? result.offset),
+      durationMilliseconds: ticksToMilliseconds(raw.Duration ?? result.duration),
+      confidence: toNumber(best?.Confidence),
+      words: words
+        .filter((word): word is Record<string, unknown> => typeof word === "object" && word !== null)
+        .map((word) => ({
+          text: String(word.Word ?? "").trim(),
+          offsetMilliseconds: ticksToMilliseconds(word.Offset),
+          durationMilliseconds: ticksToMilliseconds(word.Duration),
+        }))
+        .filter((word) => word.text),
+    },
+    raw,
+  };
+};
+
+const ticksToMilliseconds = (value: unknown) => {
+  const ticks = toNumber(value);
+  if (ticks === null) {
+    return null;
+  }
+
+  return Math.round(ticks / 10_000);
 };

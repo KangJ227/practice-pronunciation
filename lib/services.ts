@@ -32,7 +32,9 @@ import {
 import {
   assessPronunciation,
   fastTranscribeAudio,
+  shouldFallbackToSdkTranscription,
   synthesizeSentenceAudio,
+  transcribeAudioWithSdk,
 } from "@/lib/providers/azure";
 import { analyzeAttemptWithKimi } from "@/lib/providers/kimi";
 import type {
@@ -148,7 +150,25 @@ export const createAudioMaterialWorkflow = async (input: {
   }
 
   try {
-    const transcription = await fastTranscribeAudio(saved.fullPath, input.file.name, locale);
+    let transcription: FastTranscriptionResult;
+
+    try {
+      transcription = await fastTranscribeAudio(saved.fullPath, input.file.name, locale);
+    } catch (error) {
+      if (!shouldFallbackToSdkTranscription(error)) {
+        throw error;
+      }
+
+      const wavStorageKey = path.posix.join(
+        "materials",
+        material.id,
+        "transcription",
+        `${path.basename(saved.storageKey, path.extname(saved.storageKey))}.wav`,
+      );
+      const wavPath = await convertToMonoWav(saved.fullPath, wavStorageKey);
+      transcription = await transcribeAudioWithSdk(wavPath, locale);
+    }
+
     const initialSegments = buildSegmentsFromTranscription(transcription);
     const persistedSegments = replaceSegments(material.id, initialSegments);
 
