@@ -21,8 +21,11 @@ const mediaUrl = (storageKey: string | null | undefined) =>
 type LocalAttemptPreview = {
   segmentId: string;
   url: string;
+  file: File;
   fileName: string;
   createdAt: string;
+  status: "scoring" | "saved" | "failed";
+  error: string | null;
 };
 
 export function PracticeStudio({
@@ -34,6 +37,7 @@ export function PracticeStudio({
   const [practice, setPractice] = useState(initialPractice);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pending, setPending] = useState(false);
+  const [aiPendingId, setAiPendingId] = useState<string | null>(null);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState<string | null>(practice.material.statusDetail);
   const [loopClip, setLoopClip] = useState(false);
@@ -138,14 +142,18 @@ export function PracticeStudio({
   };
 
   const submitFile = async (file: File) => {
+    const previewUrl = URL.createObjectURL(file);
     setLocalAttemptPreview({
       segmentId: segment.id,
-      url: URL.createObjectURL(file),
+      url: previewUrl,
+      file,
       fileName: file.name,
       createdAt: new Date().toISOString(),
+      status: "scoring",
+      error: null,
     });
     setPending(true);
-    setMessage("Scoring your attempt…");
+    setMessage("Running Azure scoring for your attempt...");
 
     try {
       const formData = new FormData();
@@ -156,6 +164,7 @@ export function PracticeStudio({
       });
       const payload = (await response.json()) as {
         error?: string;
+        attempt?: PracticeAttempt;
         practice?: PracticeMaterialView;
       };
 
@@ -167,12 +176,65 @@ export function PracticeStudio({
         setPractice(payload.practice);
       }
 
-      setMessage("Attempt saved. Review the feedback and record again.");
+      const scoringStatus = String(payload.attempt?.providerRawJson.status ?? "");
+      if (scoringStatus === "error" || scoringStatus === "degraded") {
+        const errorMessage =
+          typeof payload.attempt?.providerRawJson.message === "string"
+            ? payload.attempt.providerRawJson.message
+            : "Azure scoring did not complete for this audio.";
+        setLocalAttemptPreview((current) =>
+          current?.url === previewUrl
+            ? { ...current, status: "failed", error: errorMessage }
+            : current,
+        );
+        setMessage(`${errorMessage} The audio was saved, and you can retry or upload another take.`);
+        startTransition(() => router.refresh());
+        return;
+      }
+
+      setLocalAttemptPreview((current) =>
+        current?.url === previewUrl ? { ...current, status: "saved", error: null } : current,
+      );
+      setMessage("Azure scoring saved. Generate AI feedback when you want coaching notes.");
       startTransition(() => router.refresh());
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Failed to score your attempt.");
+      const errorMessage = error instanceof Error ? error.message : "Failed to score your attempt.";
+      setLocalAttemptPreview((current) =>
+        current?.url === previewUrl ? { ...current, status: "failed", error: errorMessage } : current,
+      );
+      setMessage(`${errorMessage} You can retry this audio or upload another take.`);
     } finally {
       setPending(false);
+    }
+  };
+
+  const analyzeAttempt = async (attemptId: string) => {
+    setAiPendingId(attemptId);
+    setMessage("Generating AI feedback...");
+
+    try {
+      const response = await fetch(`/api/attempts/${attemptId}/analysis`, {
+        method: "POST",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        practice?: PracticeMaterialView;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to generate AI feedback.");
+      }
+
+      if (payload.practice) {
+        setPractice(payload.practice);
+      }
+
+      setMessage("AI feedback saved.");
+      startTransition(() => router.refresh());
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to generate AI feedback.");
+    } finally {
+      setAiPendingId(null);
     }
   };
 
@@ -369,6 +431,10 @@ export function PracticeStudio({
           localAttemptPreview={
             localAttemptPreview?.segmentId === segment.id ? localAttemptPreview : null
           }
+          pending={pending}
+          aiPendingId={aiPendingId}
+          onRetryLocalAttempt={(file) => void submitFile(file)}
+          onAnalyzeAttempt={(attemptId) => void analyzeAttempt(attemptId)}
         />
       </div>
 
@@ -408,7 +474,7 @@ export function PracticeStudio({
           <ul className="mt-4 space-y-3 text-sm leading-6 text-ink/75">
             <li>Keep each attempt under 20 seconds so scoring stays sentence-level.</li>
             <li>Red words reflect repeated low-score words or persistent pronunciation patterns.</li>
-            <li>If Azure or Kimi is missing, the app still stores your attempts and shows fallback guidance.</li>
+            <li>Azure scoring runs after upload; AI coaching is generated only when you ask for it.</li>
           </ul>
         </div>
       </aside>
@@ -473,9 +539,17 @@ function ActionButton({
 function AttemptPanel({
   segment,
   localAttemptPreview,
+  pending,
+  aiPendingId,
+  onRetryLocalAttempt,
+  onAnalyzeAttempt,
 }: {
   segment: PracticeSegmentView;
   localAttemptPreview: LocalAttemptPreview | null;
+  pending: boolean;
+  aiPendingId: string | null;
+  onRetryLocalAttempt: (file: File) => void;
+  onAnalyzeAttempt: (attemptId: string) => void;
 }) {
   const attempt = segment.latestAttempt;
 
@@ -491,7 +565,11 @@ function AttemptPanel({
             {formatAttemptTime(localAttemptPreview.createdAt)}
           </p>
           <p className="mt-2 text-sm leading-6 text-ink/70">
-            Replay the exact file you just recorded or uploaded while scoring finishes.
+            {localAttemptPreview.status === "failed"
+              ? localAttemptPreview.error || "Scoring failed. You can retry this same audio."
+              : localAttemptPreview.status === "saved"
+                ? "Azure scoring finished for this audio."
+                : "Replay the exact file you just recorded or uploaded while scoring finishes."}
           </p>
           <audio
             controls
@@ -500,6 +578,16 @@ function AttemptPanel({
             className="mt-3 w-full"
           />
           <p className="mt-2 text-xs text-ink/60">{localAttemptPreview.fileName}</p>
+          {localAttemptPreview.status === "failed" ? (
+            <button
+              type="button"
+              className="mt-3 rounded-full bg-berry px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={pending}
+              onClick={() => onRetryLocalAttempt(localAttemptPreview.file)}
+            >
+              {pending ? "Retrying..." : "Retry Azure Scoring"}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {attempt ? (
@@ -511,26 +599,9 @@ function AttemptPanel({
             <ScoreCard label="Completeness" value={attempt.completenessScore} />
           </div>
           <div className="mt-5 grid gap-4">
-            <div className="rounded-[22px] bg-paper/80 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-brass">
-                Saved attempt audio
-              </p>
-              <audio
-                controls
-                preload="metadata"
-                src={mediaUrl(attempt.attemptAudioPath) ?? undefined}
-                className="mt-3 w-full"
-              />
-              <FeedbackFileLinks attempt={attempt} />
-            </div>
             <InfoBlock
               label="Recognized text"
               value={attempt.recognizedText || "No transcript returned."}
-            />
-            <InfoBlock label="Summary" value={attempt.analysisJson.summary || "No summary yet."} />
-            <InfoBlock
-              label="Next drill"
-              value={attempt.analysisJson.nextDrill || "Repeat once more with the reference audio."}
             />
             {attempt.wordResultsJson.length > 0 ? (
               <div>
@@ -557,7 +628,12 @@ function AttemptPanel({
             <p className="text-sm font-semibold text-ink">Attempt history</p>
             <div className="mt-3 space-y-3">
               {segment.attempts.map((item) => (
-                <AttemptHistoryCard key={item.id} attempt={item} />
+                <AttemptHistoryCard
+                  key={item.id}
+                  attempt={item}
+                  pending={aiPendingId === item.id}
+                  onAnalyze={() => onAnalyzeAttempt(item.id)}
+                />
               ))}
             </div>
           </div>
@@ -571,7 +647,17 @@ function AttemptPanel({
   );
 }
 
-function AttemptHistoryCard({ attempt }: { attempt: PracticeAttempt }) {
+function AttemptHistoryCard({
+  attempt,
+  pending,
+  onAnalyze,
+}: {
+  attempt: PracticeAttempt;
+  pending: boolean;
+  onAnalyze: () => void;
+}) {
+  const hasAiFeedback = hasAttemptAnalysis(attempt);
+
   return (
     <div className="rounded-[22px] border border-black/10 bg-paper/70 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -587,8 +673,14 @@ function AttemptHistoryCard({ attempt }: { attempt: PracticeAttempt }) {
         <MetricPill label="Completeness" value={attempt.completenessScore} />
       </div>
       <p className="mt-3 text-sm leading-6 text-ink/75">
-        {attempt.analysisJson.summary || "No summary returned."}
+        {hasAiFeedback ? attempt.analysisJson.summary : "Azure score saved. AI feedback not generated yet."}
       </p>
+      <AiFeedbackButton
+        className="mt-3"
+        disabled={pending}
+        hasAiFeedback={hasAiFeedback}
+        onClick={onAnalyze}
+      />
       <audio
         controls
         preload="metadata"
@@ -597,6 +689,39 @@ function AttemptHistoryCard({ attempt }: { attempt: PracticeAttempt }) {
       />
       <FeedbackFileLinks attempt={attempt} />
     </div>
+  );
+}
+
+function AiFeedbackButton({
+  disabled,
+  hasAiFeedback,
+  onClick,
+  className = "",
+}: {
+  disabled: boolean;
+  hasAiFeedback: boolean;
+  onClick: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      className={`rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 ${className}`}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {disabled ? "Generating..." : hasAiFeedback ? "Regenerate AI Feedback" : "Generate AI Feedback"}
+    </button>
+  );
+}
+
+function hasAttemptAnalysis(attempt: PracticeAttempt) {
+  return Boolean(
+    attempt.feedbackJsonPath ||
+      attempt.feedbackMarkdownPath ||
+      attempt.analysisJson.summary ||
+      attempt.analysisJson.nextDrill ||
+      attempt.analysisJson.weakPatterns.length > 0,
   );
 }
 

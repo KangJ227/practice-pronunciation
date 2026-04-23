@@ -277,6 +277,17 @@ export const updateMaterial = (
   return getMaterial(materialId)!;
 };
 
+export const deleteMaterial = (materialId: string) => {
+  const material = getMaterial(materialId);
+  if (!material) {
+    throw new Error("Material not found.");
+  }
+
+  getDb().prepare("DELETE FROM materials WHERE id = ?").run(materialId);
+
+  return material;
+};
+
 export const listSegmentsByMaterial = (materialId: string) => {
   const rows = getDb()
     .prepare(
@@ -393,6 +404,35 @@ export const createAttempt = (input: {
     );
 
   return getAttempt(id)!;
+};
+
+export const updateAttemptAnalysis = (
+  attemptId: string,
+  patch: Pick<PracticeAttempt, "analysisJson" | "feedbackJsonPath" | "feedbackMarkdownPath">,
+) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  getDb()
+    .prepare(
+      `
+        UPDATE practice_attempts
+        SET analysis_json = ?,
+            feedback_json_path = ?,
+            feedback_markdown_path = ?
+        WHERE id = ?
+      `,
+    )
+    .run(
+      jsonStringify(patch.analysisJson),
+      patch.feedbackJsonPath,
+      patch.feedbackMarkdownPath,
+      attemptId,
+    );
+
+  return getAttempt(attemptId)!;
 };
 
 export const getAttempt = (attemptId: string) => {

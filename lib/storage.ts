@@ -79,6 +79,15 @@ export const removeStorageFile = async (storageKey: string) => {
   }
 };
 
+export const removeStoragePrefix = async (storageKeyPrefix: string) => {
+  try {
+    const fullPath = await resolveStoragePath(storageKeyPrefix);
+    await fs.rm(fullPath, { force: true, recursive: true });
+  } catch {
+    // Best effort cleanup.
+  }
+};
+
 export const storageUrl = (storageKey: string | null | undefined) =>
   storageKey ? `/api/media/${storageKey}` : null;
 

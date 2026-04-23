@@ -56,7 +56,7 @@ export const analyzeAttemptWithKimi = async (input: AnalyzeInput): Promise<KimiA
     ],
   };
 
-  if (appConfig.kimiModel === "kimi-k2.5") {
+  if (appConfig.kimiModel === "kimi-k2.5" || appConfig.kimiModel === "kimi-k2.6") {
     requestBody.thinking = { type: "disabled" };
   }
 
