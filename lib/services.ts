@@ -1,4 +1,5 @@
 import path from "node:path";
+import { promises as fs } from "node:fs";
 import { writeAttemptFeedbackArtifacts } from "@/lib/attempt-feedback";
 import { appConfig, isAzureSpeechConfigured } from "@/lib/config";
 import {
@@ -61,7 +62,16 @@ import {
   ensureMaterialAudioLimit,
   saveUploadedFile,
 } from "@/lib/audio";
-import { removeStorageFile, removeStoragePrefix, storageUrl, writeBuffer } from "@/lib/storage";
+import {
+  createSignedStorageUpload,
+  readStorageFile,
+  removeStorageFile,
+  removeStoragePrefix,
+  scopeStorageKey,
+  storageUrl,
+  writeBuffer,
+  writeTempBuffer,
+} from "@/lib/storage";
 import { createId, nowIso } from "@/lib/utils";
 
 const ttsErrorMessage =
@@ -74,6 +84,12 @@ const emptyAnalysis = (): KimiAnalysis => ({
   highlightTokens: [],
 });
 
+type SavedAudioFile = {
+  storageKey: string;
+  fullPath: string;
+  size?: number;
+};
+
 const normalizeSegments = (segments: EditableSegmentInput[]) =>
   segments
     .map((segment, index) => ({
@@ -82,6 +98,24 @@ const normalizeSegments = (segments: EditableSegmentInput[]) =>
       text: normalizeSentenceText(segment.text),
     }))
     .filter((segment) => segment.text);
+
+const removeTempFile = async (fullPath: string) => {
+  await fs.unlink(fullPath).catch(() => undefined);
+};
+
+const attemptStoragePrefix = (storageKey: string | null | undefined) => {
+  if (!storageKey) {
+    return null;
+  }
+
+  const parts = storageKey.split("/");
+  const attemptsIndex = parts.indexOf("attempts");
+  if (attemptsIndex < 0 || !parts[attemptsIndex + 1]) {
+    return null;
+  }
+
+  return parts.slice(0, attemptsIndex + 2).join("/");
+};
 
 export const getDashboardMaterials = async () =>
   (await listMaterials()).map((material) => ({
@@ -147,8 +181,91 @@ export const createAudioMaterialWorkflow = async (input: {
   });
 
   const saved = await saveUploadedFile(input.file, `materials/${material.id}/source`, "source");
-  await ensureMaterialAudioLimit(saved.fullPath);
+  return processAudioMaterialSource({
+    material,
+    saved,
+    originalFilename: input.file.name,
+    locale,
+  });
+};
+
+export const createAudioMaterialUploadWorkflow = async (input: {
+  title: string;
+  filename: string;
+  locale?: string;
+}) => {
+  const locale = input.locale ?? appConfig.locale;
+  const material = await createMaterial({
+    kind: "audio",
+    locale,
+    title: input.title.trim() || stripExtension(input.filename),
+    sourceText: "",
+    status: "draft",
+    statusDetail: null,
+  });
+
+  return {
+    material,
+    upload: await createSignedStorageUpload(
+      `materials/${material.id}/source`,
+      input.filename,
+      "source",
+    ),
+  };
+};
+
+export const processAudioMaterialUploadWorkflow = async (input: {
+  materialId: string;
+  storageKey: string;
+  filename: string;
+}) => {
+  const material = await getMaterial(input.materialId);
+  if (!material) {
+    throw new Error("Material not found.");
+  }
+
+  const expectedPrefix = await scopeStorageKey(`materials/${material.id}/source`);
+  if (!input.storageKey.startsWith(`${expectedPrefix}/`)) {
+    throw new Error("Uploaded audio path does not belong to this material.");
+  }
+
+  const temp = await writeTempBuffer(
+    path.posix.basename(input.filename),
+    await readStorageFile(input.storageKey),
+  );
+
+  try {
+    return await processAudioMaterialSource({
+      material,
+      saved: {
+        storageKey: input.storageKey,
+        fullPath: temp.fullPath,
+      },
+      originalFilename: input.filename,
+      locale: material.locale,
+    });
+  } finally {
+    await removeTempFile(temp.fullPath);
+  }
+};
+
+const processAudioMaterialSource = async (input: {
+  material: StudyMaterial;
+  saved: SavedAudioFile;
+  originalFilename: string;
+  locale: string;
+}) => {
+  const { material, saved, originalFilename, locale } = input;
   await updateMaterial(material.id, { sourceAudioPath: saved.storageKey });
+  try {
+    await ensureMaterialAudioLimit(saved.fullPath);
+  } catch (error) {
+    await updateMaterial(material.id, {
+      status: "error",
+      statusDetail: error instanceof Error ? error.message : "Uploaded audio is too long.",
+    });
+    throw error;
+  }
 
   if (!isAzureSpeechConfigured()) {
     return {
@@ -166,7 +283,7 @@ export const createAudioMaterialWorkflow = async (input: {
     let transcription: FastTranscriptionResult;
 
     try {
-      transcription = await fastTranscribeAudio(saved.fullPath, input.file.name, locale);
+      transcription = await fastTranscribeAudio(saved.fullPath, originalFilename, locale);
     } catch (error) {
       if (!shouldFallbackToSdkTranscription(error)) {
         throw error;
@@ -333,12 +450,19 @@ export const deleteMaterialWorkflow = async (
       attempt.feedbackMarkdownPath,
     ]),
   ].filter((storageKey): storageKey is string => Boolean(storageKey));
+  const attemptPrefixes = [
+    ...segments.map((segment) => path.posix.join("attempts", segment.id)),
+    ...attempts
+      .map((attempt) => attemptStoragePrefix(attempt.attemptAudioPath))
+      .filter((storageKey): storageKey is string => Boolean(storageKey)),
+  ];
 
   await deleteMaterial(materialId);
 
   await Promise.all([
     ...storageKeys.map((storageKey) => removeStorageFile(storageKey)),
     removeStoragePrefix(path.posix.join("materials", materialId)),
+    ...Array.from(new Set(attemptPrefixes)).map((storageKey) => removeStoragePrefix(storageKey)),
   ]);
 
   return material;
@@ -423,6 +547,68 @@ export const submitAttemptWorkflow = async (input: {
   segmentId: string;
   file: File;
 }) => {
+  const saved = await saveUploadedFile(
+    input.file,
+    `attempts/${input.segmentId}/raw`,
+    "attempt",
+  );
+
+  return scoreAttemptAudio({
+    segmentId: input.segmentId,
+    saved,
+  });
+};
+
+export const createAttemptUploadWorkflow = async (input: {
+  segmentId: string;
+  filename: string;
+}) => {
+  const segment = await getSegment(input.segmentId);
+  if (!segment) {
+    throw new Error("Segment not found.");
+  }
+
+  return {
+    upload: await createSignedStorageUpload(
+      `attempts/${segment.id}/raw`,
+      input.filename,
+      "attempt",
+    ),
+  };
+};
+
+export const processAttemptUploadWorkflow = async (input: {
+  segmentId: string;
+  storageKey: string;
+  filename: string;
+}) => {
+  const expectedPrefix = await scopeStorageKey(`attempts/${input.segmentId}/raw`);
+  if (!input.storageKey.startsWith(`${expectedPrefix}/`)) {
+    throw new Error("Uploaded attempt audio path does not belong to this sentence.");
+  }
+
+  const temp = await writeTempBuffer(
+    path.posix.basename(input.filename),
+    await readStorageFile(input.storageKey),
+  );
+
+  try {
+    return await scoreAttemptAudio({
+      segmentId: input.segmentId,
+      saved: {
+        storageKey: input.storageKey,
+        fullPath: temp.fullPath,
+      },
+    });
+  } finally {
+    await removeTempFile(temp.fullPath);
+  }
+};
+
+const scoreAttemptAudio = async (input: {
+  segmentId: string;
+  saved: SavedAudioFile;
+}) => {
   const segment = await getSegment(input.segmentId);
   if (!segment) {
     throw new Error("Segment not found.");
@@ -433,12 +619,13 @@ export const submitAttemptWorkflow = async (input: {
     throw new Error("Parent material not found.");
   }
 
-  const saved = await saveUploadedFile(
-    input.file,
-    `attempts/${segment.id}/raw`,
-    "attempt",
-  );
-  await ensureAttemptAudioLimit(saved.fullPath);
+  const saved = input.saved;
+  try {
+    await ensureAttemptAudioLimit(saved.fullPath);
+  } catch (error) {
+    await removeStorageFile(saved.storageKey);
+    throw error;
+  }
 
   const wavStorageKey = path.posix.join(
     "attempts",
@@ -447,6 +634,7 @@ export const submitAttemptWorkflow = async (input: {
     `${path.basename(saved.storageKey, path.extname(saved.storageKey))}.wav`,
   );
   const wavPath = await convertToMonoWav(saved.fullPath, wavStorageKey);
+  await removeStorageFile(saved.storageKey);
 
   const pronunciation = await runPronunciationAssessment(segment.text, wavPath);
 

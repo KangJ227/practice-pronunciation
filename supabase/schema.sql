@@ -1,6 +1,42 @@
+create extension if not exists pgcrypto with schema extensions;
+
+create table if not exists public.app_users (
+  id uuid primary key default gen_random_uuid(),
+  username text not null unique,
+  password_hash text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint app_users_username_normalized check (username = lower(trim(username))),
+  constraint app_users_password_hash_present check (length(password_hash) > 0)
+);
+
+create or replace function public.verify_app_user_password(
+  p_username text,
+  p_password text
+)
+returns table(id uuid, username text)
+language sql
+security definer
+set search_path = public
+as $$
+  select app_users.id, app_users.username
+  from public.app_users
+  where app_users.username = lower(trim(p_username))
+    and app_users.is_active = true
+    and app_users.password_hash = extensions.crypt(p_password, app_users.password_hash)
+  limit 1;
+$$;
+
+revoke execute on function public.verify_app_user_password(text, text)
+  from public, anon, authenticated;
+
+grant execute on function public.verify_app_user_password(text, text)
+  to service_role;
+
 create table if not exists public.materials (
   id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null references public.app_users(id) on delete cascade,
   kind text not null check (kind in ('text', 'audio')),
   locale text not null,
   title text not null,
@@ -13,7 +49,7 @@ create table if not exists public.materials (
 
 create table if not exists public.sentence_segments (
   id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null references public.app_users(id) on delete cascade,
   material_id text not null references public.materials(id) on delete cascade,
   idx integer not null,
   text text not null,
@@ -28,7 +64,7 @@ create table if not exists public.sentence_segments (
 
 create table if not exists public.practice_attempts (
   id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null references public.app_users(id) on delete cascade,
   material_id text not null references public.materials(id) on delete cascade,
   segment_id text references public.sentence_segments(id) on delete set null,
   attempt_audio_path text not null,
@@ -47,7 +83,7 @@ create table if not exists public.practice_attempts (
 
 create table if not exists public.weak_patterns (
   id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null references public.app_users(id) on delete cascade,
   pattern_type text not null,
   pattern_key text not null,
   display_text text not null,
@@ -61,7 +97,7 @@ create table if not exists public.weak_patterns (
 
 create table if not exists public.weak_pattern_evidence (
   id text primary key,
-  user_id uuid not null references auth.users(id) on delete cascade,
+  user_id uuid not null references public.app_users(id) on delete cascade,
   weak_pattern_id text not null references public.weak_patterns(id) on delete cascade,
   attempt_id text not null references public.practice_attempts(id) on delete cascade,
   segment_id text not null references public.sentence_segments(id) on delete cascade,
@@ -83,11 +119,14 @@ create index if not exists idx_practice_attempts_segment_created
 create index if not exists idx_practice_attempts_material_created
   on public.practice_attempts (user_id, material_id, created_at desc);
 
+alter table public.app_users enable row level security;
 alter table public.materials enable row level security;
 alter table public.sentence_segments enable row level security;
 alter table public.practice_attempts enable row level security;
 alter table public.weak_patterns enable row level security;
 alter table public.weak_pattern_evidence enable row level security;
+
+revoke all on table public.app_users from anon, authenticated;
 
 drop policy if exists "materials are private" on public.materials;
 create policy "materials are private"

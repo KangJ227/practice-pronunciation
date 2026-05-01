@@ -3,7 +3,6 @@
 import { useRouter } from "next/navigation";
 import {
   startTransition,
-  useCallback,
   useEffect,
   useRef,
   useState,
@@ -16,6 +15,10 @@ import type {
   PracticeSegmentView,
 } from "@/lib/types";
 import { getPreviewUrlToRevoke } from "@/lib/local-attempt-preview";
+import {
+  uploadToSignedStorage,
+  type SignedStorageUpload,
+} from "@/lib/supabase/upload";
 
 const mediaUrl = (storageKey: string | null | undefined) =>
   storageKey ? `/api/media/${storageKey}` : null;
@@ -52,8 +55,6 @@ export function PracticeStudio({
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<Record<string, string>>({});
   const sourceAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
-  const mediaObjectUrlCacheRef = useRef<Map<string, string>>(new Map());
-  const mediaObjectUrlPendingRef = useRef<Map<string, Promise<string>>>(new Map());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const previousPreviewUrlRef = useRef<string | null>(null);
@@ -100,9 +101,6 @@ export function PracticeStudio({
     return () => {
       sourceAudioRef.current?.pause();
       ttsAudioRef.current?.pause();
-      mediaObjectUrlCacheRef.current.forEach((url) => URL.revokeObjectURL(url));
-      mediaObjectUrlCacheRef.current.clear();
-      mediaObjectUrlPendingRef.current.clear();
       recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -124,40 +122,6 @@ export function PracticeStudio({
         URL.revokeObjectURL(previousPreviewUrlRef.current);
       }
     };
-  }, []);
-
-  const getCachedMediaUrl = useCallback(async (url: string) => {
-    const cachedUrl = mediaObjectUrlCacheRef.current.get(url);
-    if (cachedUrl) {
-      return cachedUrl;
-    }
-
-    const pendingUrl = mediaObjectUrlPendingRef.current.get(url);
-    if (pendingUrl) {
-      return pendingUrl;
-    }
-
-    const separator = url.includes("?") ? "&" : "?";
-    const pending = fetch(`${url}${separator}download=1`, {
-      credentials: "same-origin",
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error("This browser could not cache the audio file.");
-        }
-
-        const objectUrl = URL.createObjectURL(await response.blob());
-        mediaObjectUrlCacheRef.current.set(url, objectUrl);
-        mediaObjectUrlPendingRef.current.delete(url);
-        return objectUrl;
-      })
-      .catch((error) => {
-        mediaObjectUrlPendingRef.current.delete(url);
-        throw error;
-      });
-
-    mediaObjectUrlPendingRef.current.set(url, pending);
-    return pending;
   }, []);
 
   if (!hasSegments) {
@@ -184,8 +148,7 @@ export function PracticeStudio({
 
     audio.pause();
     try {
-      const cachedSourceAudioUrl = await getCachedMediaUrl(sourceAudioUrl);
-      await loadAudioMetadata(audio, cachedSourceAudioUrl);
+      await loadAudioMetadata(audio, sourceAudioUrl);
       audio.currentTime = segment.startMs / 1000;
     } catch (error) {
       setMessage(
@@ -230,7 +193,7 @@ export function PracticeStudio({
 
     audio.pause();
     try {
-      audio.src = await getCachedMediaUrl(ttsUrl);
+      audio.src = ttsUrl;
       await audio.play();
       setMessage(null);
     } catch (error) {
@@ -250,14 +213,38 @@ export function PracticeStudio({
       error: null,
     });
     setPending(true);
-    setMessage("Running Azure scoring for your attempt...");
+    setMessage("Uploading your attempt audio...");
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await fetch(`/api/segments/${segment.id}/attempts`, {
+      const uploadResponse = await fetch(`/api/segments/${segment.id}/attempts/upload`, {
         method: "POST",
-        body: formData,
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          filename: file.name,
+        }),
+      });
+      const uploadPayload = (await uploadResponse.json()) as {
+        error?: string;
+        upload?: SignedStorageUpload & { storageKey: string };
+      };
+      if (!uploadResponse.ok || !uploadPayload.upload) {
+        throw new Error(uploadPayload.error || "Failed to prepare attempt upload.");
+      }
+
+      await uploadToSignedStorage(uploadPayload.upload, file);
+      setMessage("Running Azure scoring for your attempt...");
+
+      const response = await fetch(`/api/segments/${segment.id}/attempts/process`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          storageKey: uploadPayload.upload.storageKey,
+          filename: file.name,
+        }),
       });
       const payload = (await response.json()) as {
         error?: string;

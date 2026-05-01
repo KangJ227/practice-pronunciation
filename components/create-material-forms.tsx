@@ -3,6 +3,10 @@
 import { useRouter } from "next/navigation";
 import { startTransition, useState } from "react";
 import type { ReactNode } from "react";
+import {
+  uploadToSignedStorage,
+  type SignedStorageUpload,
+} from "@/lib/supabase/upload";
 
 export function CreateMaterialForms() {
   const router = useRouter();
@@ -91,15 +95,51 @@ export function CreateMaterialForms() {
           setAudioPending(true);
           setAudioError(null);
           const formData = new FormData(event.currentTarget);
+          const file = formData.get("file");
 
           try {
-            const response = await fetch("/api/materials/audio", {
+            if (!(file instanceof File)) {
+              throw new Error("Please upload an audio file.");
+            }
+
+            const uploadResponse = await fetch("/api/materials/audio/upload", {
               method: "POST",
-              body: formData,
+              headers: {
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                title: String(formData.get("title") ?? ""),
+                filename: file.name,
+              }),
             });
-            const payload = (await response.json()) as { error?: string; redirectTo?: string };
-            if (!response.ok) {
-              throw new Error(payload.error || "Failed to create audio material.");
+            const uploadPayload = (await uploadResponse.json()) as {
+              error?: string;
+              material?: { id: string };
+              upload?: SignedStorageUpload & { storageKey: string };
+            };
+            if (!uploadResponse.ok || !uploadPayload.upload || !uploadPayload.material) {
+              throw new Error(uploadPayload.error || "Failed to prepare audio upload.");
+            }
+
+            await uploadToSignedStorage(uploadPayload.upload, file);
+
+            const processResponse = await fetch("/api/materials/audio/process", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+              },
+              body: JSON.stringify({
+                materialId: uploadPayload.material.id,
+                storageKey: uploadPayload.upload.storageKey,
+                filename: file.name,
+              }),
+            });
+            const payload = (await processResponse.json()) as {
+              error?: string;
+              redirectTo?: string;
+            };
+            if (!processResponse.ok) {
+              throw new Error(payload.error || "Failed to process audio material.");
             }
 
             startTransition(() => {

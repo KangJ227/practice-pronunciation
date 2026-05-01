@@ -4,7 +4,7 @@ import path from "node:path";
 import { appConfig } from "@/lib/config";
 import { requireUser } from "@/lib/auth";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
-import { createId, safeFileName } from "@/lib/utils";
+import { createId, extnameOr, safeFileName } from "@/lib/utils";
 
 const tempRoot = path.join(os.tmpdir(), "french-pronunciation-storage");
 
@@ -56,6 +56,35 @@ export const writeBuffer = async (
 ) => {
   const storageKey = path.posix.join(folder, `${createId()}-${safeFileName(filename)}`);
   return writeStorageFile(storageKey, content);
+};
+
+export const createSignedStorageUpload = async (
+  folder: string,
+  originalFilename: string,
+  nameHint = "upload",
+) => {
+  const extension = extnameOr(originalFilename, ".bin");
+  const storageKey = path.posix.join(
+    folder,
+    `${createId()}-${safeFileName(nameHint)}${extension}`,
+  );
+  const scopedKey = await scopeStorageKey(storageKey);
+  const { data, error } = await getSupabaseAdmin()
+    .storage
+    .from(appConfig.supabaseStorageBucket)
+    .createSignedUploadUrl(scopedKey);
+
+  if (error || !data?.signedUrl || !data.token) {
+    throw new Error(error?.message ?? "Failed to create signed upload URL.");
+  }
+
+  return {
+    bucket: appConfig.supabaseStorageBucket,
+    storageKey: scopedKey,
+    path: data.path ?? scopedKey,
+    token: data.token,
+    signedUrl: data.signedUrl,
+  };
 };
 
 export const writeStorageFile = async (
@@ -166,6 +195,20 @@ export const readStorageFile = async (storageKey: string) => {
   }
 
   return Buffer.from(await data.arrayBuffer());
+};
+
+export const storageFileExists = async (storageKey: string) => {
+  const scopedKey = await scopeStorageKey(storageKey);
+  const { data, error } = await getSupabaseAdmin()
+    .storage
+    .from(appConfig.supabaseStorageBucket)
+    .exists(scopedKey);
+
+  if (error) {
+    throw new Error(`Failed to check storage object: ${error.message}`);
+  }
+
+  return Boolean(data);
 };
 
 export const createSignedStorageUrl = async (storageKey: string, expiresInSeconds = 300) => {
