@@ -1,4 +1,4 @@
-create extension if not exists pgcrypto;
+create extension if not exists pgcrypto with schema extensions;
 
 create table if not exists public.app_users (
   id uuid primary key default gen_random_uuid(),
@@ -24,7 +24,7 @@ as $$
   from public.app_users
   where app_users.username = lower(trim(p_username))
     and app_users.is_active = true
-    and app_users.password_hash = crypt(p_password, app_users.password_hash)
+    and app_users.password_hash = extensions.crypt(p_password, app_users.password_hash)
   limit 1;
 $$;
 
