@@ -4,7 +4,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { appConfig } from "@/lib/config";
 import { createId, extnameOr } from "@/lib/utils";
-import { resolveStoragePath } from "@/lib/storage";
+import { resolveStoragePath, uploadLocalFile, writeStorageFile } from "@/lib/storage";
 
 const execFileAsync = promisify(execFile);
 const ffmpegPath = "/opt/homebrew/bin/ffmpeg";
@@ -21,8 +21,9 @@ export const saveUploadedFile = async (
   await fs.mkdir(path.dirname(fullPath), { recursive: true });
   const buffer = Buffer.from(await file.arrayBuffer());
   await fs.writeFile(fullPath, buffer);
+  const persistedStorageKey = await writeStorageFile(storageKey, buffer);
   return {
-    storageKey,
+    storageKey: persistedStorageKey,
     fullPath,
     size: buffer.byteLength,
   };
@@ -78,6 +79,7 @@ export const convertToMonoWav = async (inputPath: string, outputStorageKey: stri
     outputPath,
   ]);
 
+  await uploadLocalFile(outputStorageKey, outputPath);
   return outputPath;
 };
 
@@ -99,6 +101,7 @@ export const convertToPlaybackMp3 = async (inputPath: string, outputStorageKey: 
     outputPath,
   ]);
 
+  await uploadLocalFile(outputStorageKey, outputPath);
   return outputPath;
 };
 

@@ -1,6 +1,6 @@
 # Atelier de Prononciation
 
-A local-first French pronunciation practice web app built with Next.js, Azure Speech, and Kimi.
+A private French pronunciation practice web app built with Next.js, Supabase, Azure Speech, and Kimi.
 
 ## What it does
 
@@ -18,8 +18,7 @@ A local-first French pronunciation practice web app built with Next.js, Azure Sp
 - Next.js App Router
 - TypeScript
 - Tailwind CSS
-- SQLite via Node `node:sqlite`
-- Local filesystem storage under `storage/`
+- Supabase Auth, Postgres, and private Storage
 - Azure Speech REST + SDK
 - Kimi Chat Completions API (`https://api.moonshot.cn/v1`)
 
@@ -30,16 +29,28 @@ A local-first French pronunciation practice web app built with Next.js, Azure Sp
 
 ## Getting started
 
-1. Copy `.env.example` to `.env.local`
-2. Fill in `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`
-3. Optionally fill in `KIMI_API_KEY`
-4. Install dependencies:
+1. Create a Supabase project.
+2. Run `supabase/schema.sql` in the Supabase SQL editor.
+3. Copy `.env.example` to `.env.local` or create `.env.local`.
+4. Fill in the required Supabase environment variables:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+ALLOWED_LOGIN_EMAIL=
+SUPABASE_STORAGE_BUCKET=practice-media
+```
+
+5. Fill in `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`.
+6. Optionally fill in `KIMI_API_KEY`.
+7. Install dependencies:
 
 ```bash
 npm install
 ```
 
-5. Start the app:
+8. Start the app:
 
 ```bash
 npm run dev
@@ -51,9 +62,49 @@ Open [http://localhost:3000](http://localhost:3000).
 
 - Text materials still work without Azure credentials, but TTS generation is skipped.
 - Audio materials are saved even without Azure credentials, but transcription stays unavailable until Azure Speech is configured.
+- The app is private: pages, APIs, and media require Supabase login with `ALLOWED_LOGIN_EMAIL`.
 - Practice attempts are always stored; if Azure or Kimi is unavailable, the app falls back to degraded feedback instead of dropping the upload.
-- Each saved attempt also writes feedback artifacts to `storage/attempts/<segment-id>/feedback/` as `.json` and `.md`.
+- Each saved attempt also writes feedback artifacts to Supabase Storage as `.json` and `.md`.
 - Weak-word highlighting appears after repeated low scores, or after a single omission/insertion error.
+
+## CI/CD
+
+GitHub Actions contains two workflows:
+
+- `.github/workflows/ci.yml` runs on pull requests and manual dispatch.
+- `.github/workflows/deploy.yml` runs on pushes to `main` and manual dispatch. It verifies the app, pushes Supabase migrations, then deploys to Vercel production.
+
+Add these GitHub repository secrets:
+
+```bash
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SERVICE_ROLE_KEY
+ALLOWED_LOGIN_EMAIL
+SUPABASE_ACCESS_TOKEN
+SUPABASE_PROJECT_ID
+SUPABASE_DB_PASSWORD
+VERCEL_TOKEN
+VERCEL_ORG_ID
+VERCEL_PROJECT_ID
+AZURE_SPEECH_KEY
+AZURE_SPEECH_REGION
+KIMI_API_KEY
+```
+
+Recommended GitHub repository variables:
+
+```bash
+SUPABASE_STORAGE_BUCKET=practice-media
+AZURE_SPEECH_VOICE=fr-FR-DeniseNeural
+KIMI_BASE_URL=https://api.moonshot.cn/v1
+KIMI_MODEL=kimi-k2.5
+DEFAULT_LOCALE=fr-FR
+MAX_AUDIO_MINUTES=10
+MAX_ATTEMPT_SECONDS=20
+```
+
+The first production deploy applies `supabase/migrations/20260501000000_initial_private_practice_app.sql`. Future database changes should be added as new files under `supabase/migrations/`.
 
 ## API surface
 

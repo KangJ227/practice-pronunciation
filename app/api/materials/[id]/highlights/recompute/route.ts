@@ -7,7 +7,7 @@ export async function POST(
 ) {
   try {
     const params = await context.params;
-    return jsonOk(recomputeHighlightsWorkflow(params.id));
+    return jsonOk(await recomputeHighlightsWorkflow(params.id));
   } catch (error) {
     return jsonError(
       error instanceof Error ? error.message : "Failed to recompute highlights.",

@@ -3,9 +3,13 @@ import { appConfig, isAzureSpeechConfigured, isKimiConfigured } from "@/lib/conf
 import { getDashboardMaterials } from "@/lib/services";
 import { CreateMaterialForms } from "@/components/create-material-forms";
 import { MaterialList } from "@/components/material-list";
+import { requirePageUser } from "@/lib/auth";
 
-export default function HomePage() {
-  const materials = getDashboardMaterials();
+export const dynamic = "force-dynamic";
+
+export default async function HomePage() {
+  await requirePageUser();
+  const materials = await getDashboardMaterials();
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-10 px-5 py-8 md:px-8 lg:px-10">
