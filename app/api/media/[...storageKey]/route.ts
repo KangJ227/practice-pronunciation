@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
+import { ensurePlaybackMp3 } from "@/lib/audio";
 import { createSignedStorageUrl, readStorageFile } from "@/lib/storage";
+
+export const runtime = "nodejs";
+export const maxDuration = 120;
 
 const contentTypeFor = (storageKey: string) => {
   const extension = storageKey.split(".").pop()?.toLowerCase();
@@ -9,7 +13,15 @@ const contentTypeFor = (storageKey: string) => {
   if (extension === "webm") return "audio/webm";
   if (extension === "ogg" || extension === "opus") return "audio/ogg";
   if (extension === "m4a") return "audio/mp4";
+  if (extension === "json") return "application/json";
+  if (extension === "md") return "text/markdown; charset=utf-8";
+  if (extension === "txt") return "text/plain; charset=utf-8";
   return "application/octet-stream";
+};
+
+const canProxyDownload = (storageKey: string) => {
+  const extension = storageKey.split(".").pop()?.toLowerCase();
+  return extension === "json" || extension === "md" || extension === "txt";
 };
 
 export async function GET(
@@ -25,19 +37,20 @@ export async function GET(
       return new Response("Forbidden", { status: 403 });
     }
 
+    const mediaStorageKey = await ensurePlaybackMp3(joined);
     const requestUrl = new URL(request.url);
-    if (requestUrl.searchParams.get("download") === "1") {
-      const file = await readStorageFile(joined);
+    if (requestUrl.searchParams.get("download") === "1" && canProxyDownload(mediaStorageKey)) {
+      const file = await readStorageFile(mediaStorageKey);
       return new Response(file, {
         headers: {
           "cache-control": "private, max-age=31536000, immutable",
           "content-length": String(file.byteLength),
-          "content-type": contentTypeFor(joined),
+          "content-type": contentTypeFor(mediaStorageKey),
         },
       });
     }
 
-    const signedUrl = await createSignedStorageUrl(joined);
+    const signedUrl = await createSignedStorageUrl(mediaStorageKey);
     return NextResponse.redirect(signedUrl);
   } catch {
     return new Response("Not found", { status: 404 });

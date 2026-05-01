@@ -1,6 +1,9 @@
 import { submitAttemptWorkflow } from "@/lib/services";
 import { jsonError, jsonOk } from "@/lib/api";
 
+export const runtime = "nodejs";
+export const maxDuration = 120;
+
 export async function POST(
   request: Request,
   context: { params: Promise<{ id: string }> },

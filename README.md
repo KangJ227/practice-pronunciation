@@ -18,14 +18,15 @@ A private French pronunciation practice web app built with Next.js, Supabase, Az
 - Next.js App Router
 - TypeScript
 - Tailwind CSS
-- Supabase Auth, Postgres, and private Storage
+- Supabase Postgres and private Storage with app-managed username/password sessions
 - Azure Speech REST + SDK
 - Kimi Chat Completions API (`https://api.moonshot.cn/v1`)
+- Bundled ffmpeg for server-side audio normalization
 
 ## Requirements
 
 - Node 22+ (`.nvmrc` pins `24.14.0`)
-- `ffmpeg` and `ffprobe` available at `/opt/homebrew/bin`
+- ffmpeg is installed through npm for Vercel/Linux and local development. Set `FFMPEG_PATH` only if you want to force a custom binary.
 
 ## Getting started
 
@@ -113,6 +114,7 @@ NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY
 APP_SESSION_SECRET
 SUPABASE_STORAGE_BUCKET=practice-media
+FFMPEG_PATH
 AZURE_SPEECH_KEY
 AZURE_SPEECH_REGION
 AZURE_SPEECH_VOICE=fr-FR-DeniseNeural
@@ -141,10 +143,14 @@ The first production deploy applies `supabase/migrations/20260501000000_initial_
 
 - `POST /api/materials/text`
 - `POST /api/materials/audio`
+- `POST /api/materials/audio/upload`
+- `POST /api/materials/audio/process`
 - `PATCH /api/materials/:id/segments`
 - `GET /api/materials/:id/practice`
 - `POST /api/materials/:id/highlights/recompute`
 - `POST /api/segments/:id/attempts`
+- `POST /api/segments/:id/attempts/upload`
+- `POST /api/segments/:id/attempts/process`
 - `GET /api/media/[...storageKey]`
 
 ## Notes
