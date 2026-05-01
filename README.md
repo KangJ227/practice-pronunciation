@@ -65,7 +65,7 @@ account directly in SQL:
 
 ```sql
 insert into public.app_users (username, password_hash)
-values ('jing', crypt('change-this-password', gen_salt('bf')));
+values ('jing', extensions.crypt('change-this-password', extensions.gen_salt('bf')));
 ```
 
 Usernames must be lowercase. Passwords are checked with Postgres `pgcrypto`
@@ -77,7 +77,7 @@ new login to that existing `user_id` instead:
 ```sql
 update public.app_users
 set username = 'jing',
-    password_hash = crypt('change-this-password', gen_salt('bf')),
+    password_hash = extensions.crypt('change-this-password', extensions.gen_salt('bf')),
     is_active = true
 where id = (
   select user_id
