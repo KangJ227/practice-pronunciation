@@ -2,6 +2,9 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PracticeStudio } from "@/components/practice-studio";
 import { getPracticeMaterialView } from "@/lib/services";
+import { requirePageUser } from "@/lib/auth";
+
+export const dynamic = "force-dynamic";
 
 export default async function PracticePage({
   params,
@@ -9,8 +12,9 @@ export default async function PracticePage({
   params: Promise<{ id: string }>;
 }) {
   try {
+    await requirePageUser();
     const { id } = await params;
-    const view = getPracticeMaterialView(id);
+    const view = await getPracticeMaterialView(id);
 
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-5 py-8 md:px-8">

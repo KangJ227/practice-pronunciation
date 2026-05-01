@@ -7,7 +7,7 @@ export async function GET(
 ) {
   try {
     const params = await context.params;
-    return jsonOk(getPracticeMaterialView(params.id));
+    return jsonOk(await getPracticeMaterialView(params.id));
   } catch (error) {
     return jsonError(
       error instanceof Error ? error.message : "Failed to load practice view.",

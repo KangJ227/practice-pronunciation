@@ -148,12 +148,15 @@ export const writeAttemptFeedbackArtifacts = async (input: AttemptFeedbackInput)
   const markdown = buildAttemptFeedbackMarkdown(input);
   const paths = getAttemptFeedbackPaths(input.attempt);
 
-  await Promise.all([
+  const [feedbackJsonPath, feedbackMarkdownPath] = await Promise.all([
     writeStorageFile(paths.feedbackJsonPath, `${JSON.stringify(payload, null, 2)}\n`),
     writeStorageFile(paths.feedbackMarkdownPath, markdown),
   ]);
 
-  return paths;
+  return {
+    feedbackJsonPath,
+    feedbackMarkdownPath,
+  };
 };
 
 const formatScore = (value: number | null | undefined) => {

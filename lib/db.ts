@@ -1,6 +1,3 @@
-import { DatabaseSync } from "node:sqlite";
-import path from "node:path";
-import { mkdirSync } from "node:fs";
 import type {
   EditableSegmentInput,
   PracticeAttempt,
@@ -8,223 +5,32 @@ import type {
   StudyMaterial,
   WeakPattern,
 } from "@/lib/types";
+import { requireUser } from "@/lib/auth";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { createId, jsonParse, jsonStringify, nowIso } from "@/lib/utils";
 
-const storageDir = path.join(process.cwd(), "storage");
-mkdirSync(storageDir, { recursive: true });
+type Row = Record<string, unknown>;
 
-const dbPath = path.join(storageDir, "app.sqlite");
-
-const globalForDb = globalThis as unknown as {
-  pronunciationDb?: DatabaseSync;
+const emptyAnalysis = {
+  summary: "",
+  nextDrill: "",
+  weakPatterns: [],
+  highlightTokens: [],
 };
 
-const ensureColumnExists = (
-  db: DatabaseSync,
-  tableName: string,
-  columnName: string,
-  definition: string,
-) => {
-  const columns = db
-    .prepare(`PRAGMA table_info(${tableName})`)
-    .all() as Array<Record<string, unknown>>;
+const admin = () => getSupabaseAdmin();
 
-  if (columns.some((column) => String(column.name) === columnName)) {
-    return;
-  }
+const currentUserId = async () => (await requireUser()).id;
 
-  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+const fail = (message: string, error: unknown): never => {
+  const detail =
+    error && typeof error === "object" && "message" in error
+      ? String((error as { message?: unknown }).message)
+      : "";
+  throw new Error(detail ? `${message}: ${detail}` : message);
 };
 
-const tableExists = (db: DatabaseSync, tableName: string) =>
-  Boolean(
-    db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get(tableName),
-  );
-
-const recreatePracticeAttemptsTable = (db: DatabaseSync, hasMaterialId: boolean) => {
-  db.exec("PRAGMA foreign_keys = OFF;");
-  db.exec("BEGIN");
-
-  try {
-    const materialIdSelect = hasMaterialId ? "pa.material_id" : "ss.material_id";
-    db.exec(`
-      CREATE TABLE practice_attempts_new (
-        id TEXT PRIMARY KEY,
-        material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
-        segment_id TEXT REFERENCES sentence_segments(id) ON DELETE SET NULL,
-        attempt_audio_path TEXT NOT NULL,
-        recognized_text TEXT NOT NULL DEFAULT '',
-        pron_score REAL,
-        accuracy_score REAL,
-        fluency_score REAL,
-        completeness_score REAL,
-        word_results_json TEXT NOT NULL,
-        provider_raw_json TEXT NOT NULL,
-        analysis_json TEXT NOT NULL,
-        feedback_json_path TEXT,
-        feedback_markdown_path TEXT,
-        created_at TEXT NOT NULL
-      );
-
-      INSERT INTO practice_attempts_new (
-        id, material_id, segment_id, attempt_audio_path, recognized_text, pron_score,
-        accuracy_score, fluency_score, completeness_score, word_results_json, provider_raw_json,
-        analysis_json, feedback_json_path, feedback_markdown_path, created_at
-      )
-      SELECT
-        pa.id,
-        ${materialIdSelect},
-        pa.segment_id,
-        pa.attempt_audio_path,
-        pa.recognized_text,
-        pa.pron_score,
-        pa.accuracy_score,
-        pa.fluency_score,
-        pa.completeness_score,
-        pa.word_results_json,
-        pa.provider_raw_json,
-        pa.analysis_json,
-        pa.feedback_json_path,
-        pa.feedback_markdown_path,
-        pa.created_at
-      FROM practice_attempts pa
-      LEFT JOIN sentence_segments ss ON ss.id = pa.segment_id;
-
-      DROP TABLE practice_attempts;
-      ALTER TABLE practice_attempts_new RENAME TO practice_attempts;
-      CREATE INDEX idx_practice_attempts_segment_created
-        ON practice_attempts (segment_id, created_at DESC);
-      CREATE INDEX idx_practice_attempts_material_created
-        ON practice_attempts (material_id, created_at DESC);
-    `);
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  } finally {
-    db.exec("PRAGMA foreign_keys = ON;");
-  }
-};
-
-const ensurePracticeAttemptsSchema = (db: DatabaseSync) => {
-  const foreignKeys = db
-    .prepare("PRAGMA foreign_key_list(practice_attempts)")
-    .all() as Array<Record<string, unknown>>;
-  const columns = db
-    .prepare("PRAGMA table_info(practice_attempts)")
-    .all() as Array<Record<string, unknown>>;
-  const hasMaterialId = columns.some((column) => String(column.name) === "material_id");
-  const segmentFk = foreignKeys.find((key) => String(key.from) === "segment_id");
-  const segmentNeedsMigration =
-    !segmentFk || String(segmentFk.on_delete).toUpperCase() !== "SET NULL";
-
-  if (!hasMaterialId || segmentNeedsMigration) {
-    recreatePracticeAttemptsTable(db, hasMaterialId);
-  }
-};
-
-const initDb = () => {
-  const db = new DatabaseSync(dbPath);
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS materials (
-      id TEXT PRIMARY KEY,
-      kind TEXT NOT NULL,
-      locale TEXT NOT NULL,
-      title TEXT NOT NULL,
-      source_text TEXT NOT NULL DEFAULT '',
-      source_audio_path TEXT,
-      status TEXT NOT NULL,
-      status_detail TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sentence_segments (
-      id TEXT PRIMARY KEY,
-      material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
-      idx INTEGER NOT NULL,
-      text TEXT NOT NULL,
-      normalized_text TEXT NOT NULL,
-      start_ms INTEGER,
-      end_ms INTEGER,
-      tts_audio_path TEXT,
-      starred INTEGER NOT NULL DEFAULT 0,
-      source TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_sentence_segments_material_idx
-      ON sentence_segments (material_id, idx);
-
-    CREATE TABLE IF NOT EXISTS practice_attempts (
-      id TEXT PRIMARY KEY,
-      material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
-      segment_id TEXT REFERENCES sentence_segments(id) ON DELETE SET NULL,
-      attempt_audio_path TEXT NOT NULL,
-      recognized_text TEXT NOT NULL DEFAULT '',
-      pron_score REAL,
-      accuracy_score REAL,
-      fluency_score REAL,
-      completeness_score REAL,
-      word_results_json TEXT NOT NULL,
-      provider_raw_json TEXT NOT NULL,
-      analysis_json TEXT NOT NULL,
-      feedback_json_path TEXT,
-      feedback_markdown_path TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_practice_attempts_segment_created
-      ON practice_attempts (segment_id, created_at DESC);
-    CREATE INDEX IF NOT EXISTS idx_practice_attempts_material_created
-      ON practice_attempts (material_id, created_at DESC);
-
-    CREATE TABLE IF NOT EXISTS weak_patterns (
-      id TEXT PRIMARY KEY,
-      pattern_type TEXT NOT NULL,
-      pattern_key TEXT NOT NULL,
-      display_text TEXT NOT NULL,
-      severity INTEGER NOT NULL,
-      evidence_count INTEGER NOT NULL,
-      last_seen_at TEXT NOT NULL,
-      last_segment_text TEXT NOT NULL,
-      notes_json TEXT NOT NULL
-    );
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_weak_patterns_key
-      ON weak_patterns (pattern_type, pattern_key);
-
-    CREATE TABLE IF NOT EXISTS weak_pattern_evidence (
-      id TEXT PRIMARY KEY,
-      weak_pattern_id TEXT NOT NULL REFERENCES weak_patterns(id) ON DELETE CASCADE,
-      attempt_id TEXT NOT NULL REFERENCES practice_attempts(id) ON DELETE CASCADE,
-      segment_id TEXT NOT NULL REFERENCES sentence_segments(id) ON DELETE CASCADE,
-      token TEXT NOT NULL,
-      score REAL,
-      error_type TEXT,
-      created_at TEXT NOT NULL
-      );
-  `);
-  if (tableExists(db, "practice_attempts")) {
-    ensurePracticeAttemptsSchema(db);
-  }
-  ensureColumnExists(db, "sentence_segments", "starred", "INTEGER NOT NULL DEFAULT 0");
-  ensureColumnExists(db, "practice_attempts", "feedback_json_path", "TEXT");
-  ensureColumnExists(db, "practice_attempts", "feedback_markdown_path", "TEXT");
-  return db;
-};
-
-export const getDb = () => {
-  if (!globalForDb.pronunciationDb) {
-    globalForDb.pronunciationDb = initDb();
-  }
-
-  return globalForDb.pronunciationDb;
-};
-
-const rowToMaterial = (row: Record<string, unknown>): StudyMaterial => ({
+const rowToMaterial = (row: Row): StudyMaterial => ({
   id: String(row.id),
   kind: row.kind as StudyMaterial["kind"],
   locale: String(row.locale),
@@ -236,7 +42,7 @@ const rowToMaterial = (row: Record<string, unknown>): StudyMaterial => ({
   createdAt: String(row.created_at),
 });
 
-const rowToSegment = (row: Record<string, unknown>): SentenceSegment => ({
+const rowToSegment = (row: Row): SentenceSegment => ({
   id: String(row.id),
   materialId: String(row.material_id),
   index: Number(row.idx),
@@ -250,7 +56,7 @@ const rowToSegment = (row: Record<string, unknown>): SentenceSegment => ({
   createdAt: String(row.created_at),
 });
 
-const rowToAttempt = (row: Record<string, unknown>): PracticeAttempt => ({
+const rowToAttempt = (row: Row): PracticeAttempt => ({
   id: String(row.id),
   materialId: String(row.material_id),
   segmentId: row.segment_id ? String(row.segment_id) : null,
@@ -263,18 +69,13 @@ const rowToAttempt = (row: Record<string, unknown>): PracticeAttempt => ({
   fluencyScore: row.fluency_score === null ? null : Number(row.fluency_score),
   completenessScore:
     row.completeness_score === null ? null : Number(row.completeness_score),
-  wordResultsJson: jsonParse(row.word_results_json as string, []),
-  providerRawJson: jsonParse(row.provider_raw_json as string, {}),
-  analysisJson: jsonParse(row.analysis_json as string, {
-    summary: "",
-    nextDrill: "",
-    weakPatterns: [],
-    highlightTokens: [],
-  }),
+  wordResultsJson: jsonParse(String(row.word_results_json ?? "[]"), []),
+  providerRawJson: jsonParse(String(row.provider_raw_json ?? "{}"), {}),
+  analysisJson: jsonParse(String(row.analysis_json ?? "{}"), emptyAnalysis),
   createdAt: String(row.created_at),
 });
 
-const rowToWeakPattern = (row: Record<string, unknown>): WeakPattern => ({
+const rowToWeakPattern = (row: Row): WeakPattern => ({
   id: String(row.id),
   patternType: row.pattern_type as WeakPattern["patternType"],
   patternKey: String(row.pattern_key),
@@ -283,32 +84,41 @@ const rowToWeakPattern = (row: Record<string, unknown>): WeakPattern => ({
   evidenceCount: Number(row.evidence_count),
   lastSeenAt: String(row.last_seen_at),
   lastSegmentText: String(row.last_segment_text),
-  notesJson: jsonParse(row.notes_json as string, {}),
+  notesJson: jsonParse(String(row.notes_json ?? "{}"), {}),
 });
 
-export const listMaterials = () => {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT *
-        FROM materials
-        ORDER BY datetime(created_at) DESC
-      `,
-    )
-    .all() as Record<string, unknown>[];
+export const listMaterials = async () => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("materials")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
 
-  return rows.map(rowToMaterial);
+  if (error) {
+    fail("Failed to list materials", error);
+  }
+
+  return (data ?? []).map(rowToMaterial);
 };
 
-export const getMaterial = (materialId: string) => {
-  const row = getDb()
-    .prepare("SELECT * FROM materials WHERE id = ?")
-    .get(materialId) as Record<string, unknown> | undefined;
+export const getMaterial = async (materialId: string) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("materials")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("id", materialId)
+    .maybeSingle();
 
-  return row ? rowToMaterial(row) : null;
+  if (error) {
+    fail("Failed to load material", error);
+  }
+
+  return data ? rowToMaterial(data) : null;
 };
 
-export const createMaterial = (input: {
+export const createMaterial = async (input: {
   kind: StudyMaterial["kind"];
   locale: string;
   title: string;
@@ -317,198 +127,216 @@ export const createMaterial = (input: {
   status: StudyMaterial["status"];
   statusDetail?: string | null;
 }) => {
+  const userId = await currentUserId();
   const id = createId();
   const createdAt = nowIso();
-
-  getDb()
-    .prepare(
-      `
-        INSERT INTO materials (
-          id, kind, locale, title, source_text, source_audio_path, status, status_detail, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-    .run(
+  const { data, error } = await admin()
+    .from("materials")
+    .insert({
       id,
-      input.kind,
-      input.locale,
-      input.title,
-      input.sourceText ?? "",
-      input.sourceAudioPath ?? null,
-      input.status,
-      input.statusDetail ?? null,
-      createdAt,
-    );
+      user_id: userId,
+      kind: input.kind,
+      locale: input.locale,
+      title: input.title,
+      source_text: input.sourceText ?? "",
+      source_audio_path: input.sourceAudioPath ?? null,
+      status: input.status,
+      status_detail: input.statusDetail ?? null,
+      created_at: createdAt,
+    })
+    .select("*")
+    .single();
 
-  return getMaterial(id)!;
+  if (error) {
+    fail("Failed to create material", error);
+  }
+
+  return rowToMaterial(data);
 };
 
-export const updateMaterial = (
+export const updateMaterial = async (
   materialId: string,
   patch: Partial<Pick<StudyMaterial, "title" | "sourceText" | "sourceAudioPath" | "status" | "statusDetail">>,
 ) => {
-  const material = getMaterial(materialId);
+  const userId = await currentUserId();
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
 
-  getDb()
-    .prepare(
-      `
-        UPDATE materials
-        SET title = ?,
-            source_text = ?,
-            source_audio_path = ?,
-            status = ?,
-            status_detail = ?
-        WHERE id = ?
-      `,
-    )
-    .run(
-      patch.title ?? material.title,
-      patch.sourceText ?? material.sourceText,
-      patch.sourceAudioPath ?? material.sourceAudioPath,
-      patch.status ?? material.status,
-      patch.statusDetail ?? material.statusDetail,
-      materialId,
-    );
+  const { data, error } = await admin()
+    .from("materials")
+    .update({
+      title: patch.title ?? material.title,
+      source_text: patch.sourceText ?? material.sourceText,
+      source_audio_path:
+        patch.sourceAudioPath === undefined ? material.sourceAudioPath : patch.sourceAudioPath,
+      status: patch.status ?? material.status,
+      status_detail:
+        patch.statusDetail === undefined ? material.statusDetail : patch.statusDetail,
+    })
+    .eq("user_id", userId)
+    .eq("id", materialId)
+    .select("*")
+    .single();
 
-  return getMaterial(materialId)!;
+  if (error) {
+    fail("Failed to update material", error);
+  }
+
+  return rowToMaterial(data);
 };
 
-export const deleteMaterial = (materialId: string) => {
-  const material = getMaterial(materialId);
+export const deleteMaterial = async (materialId: string) => {
+  const userId = await currentUserId();
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
 
-  getDb().prepare("DELETE FROM materials WHERE id = ?").run(materialId);
+  const { error } = await admin()
+    .from("materials")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", materialId);
+
+  if (error) {
+    fail("Failed to delete material", error);
+  }
 
   return material;
 };
 
-export const listSegmentsByMaterial = (materialId: string) => {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT *
-        FROM sentence_segments
-        WHERE material_id = ?
-        ORDER BY idx ASC, datetime(created_at) ASC
-      `,
-    )
-    .all(materialId) as Record<string, unknown>[];
+export const listSegmentsByMaterial = async (materialId: string) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("sentence_segments")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("material_id", materialId)
+    .order("idx", { ascending: true });
 
-  return rows.map(rowToSegment);
+  if (error) {
+    fail("Failed to list segments", error);
+  }
+
+  return (data ?? []).map(rowToSegment);
 };
 
-export const replaceSegments = (
+export const replaceSegments = async (
   materialId: string,
   segments: EditableSegmentInput[],
-  defaultCreatedAt = nowIso(),
 ) => {
-  const db = getDb();
-  db.exec("BEGIN");
-  try {
-    const existing = listSegmentsByMaterial(materialId);
-    const existingById = new Map(existing.map((segment) => [segment.id, segment]));
-    const incomingIds = new Set(segments.map((segment) => segment.id).filter(Boolean));
-    const insertStmt = db.prepare(
-      `
-        INSERT INTO sentence_segments (
-          id, material_id, idx, text, normalized_text, start_ms, end_ms, tts_audio_path, starred, source, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    );
-    const updateStmt = db.prepare(
-      `
-        UPDATE sentence_segments
-        SET idx = ?,
-            text = ?,
-            normalized_text = ?,
-            start_ms = ?,
-            end_ms = ?,
-            source = ?
-        WHERE id = ?
-      `,
-    );
-    const deleteStmt = db.prepare("DELETE FROM sentence_segments WHERE id = ?");
+  const userId = await currentUserId();
+  const existing = await listSegmentsByMaterial(materialId);
+  const existingById = new Map(existing.map((segment) => [segment.id, segment]));
+  const now = nowIso();
+  const keepIds = new Set<string>();
+  const result: SentenceSegment[] = [];
 
-    for (const segment of segments) {
-      const normalizedText = segment.text.trim().toLowerCase();
-      if (segment.id && existingById.has(segment.id)) {
-        updateStmt.run(
-          segment.index,
-          segment.text,
-          normalizedText,
-          segment.startMs,
-          segment.endMs,
-          segment.source,
-          segment.id,
-        );
-        continue;
-      }
+  for (const input of segments) {
+    const existingSegment = input.id ? existingById.get(input.id) : null;
+    const id = existingSegment?.id ?? createId();
+    keepIds.add(id);
 
-      insertStmt.run(
-        segment.id ?? createId(),
-        materialId,
-        segment.index,
-        segment.text,
-        normalizedText,
-        segment.startMs,
-        segment.endMs,
-        null,
-        segment.starred ? 1 : 0,
-        segment.source,
-        defaultCreatedAt,
-      );
+    const payload = {
+      id,
+      user_id: userId,
+      material_id: materialId,
+      idx: input.index,
+      text: input.text,
+      normalized_text: input.text.toLowerCase(),
+      start_ms: input.startMs,
+      end_ms: input.endMs,
+      tts_audio_path: existingSegment?.ttsAudioPath ?? null,
+      starred: input.starred ?? existingSegment?.starred ?? false,
+      source: input.source,
+      created_at: existingSegment?.createdAt ?? now,
+    };
+
+    const { data, error } = await admin()
+      .from("sentence_segments")
+      .upsert(payload, { onConflict: "id" })
+      .select("*")
+      .single();
+
+    if (error) {
+      fail("Failed to save segment", error);
     }
 
-    for (const segment of existing) {
-      if (!incomingIds.has(segment.id)) {
-        deleteStmt.run(segment.id);
-      }
+    result.push(rowToSegment(data));
+  }
+
+  const idsToDelete = existing
+    .filter((segment) => !keepIds.has(segment.id))
+    .map((segment) => segment.id);
+
+  if (idsToDelete.length > 0) {
+    const { error } = await admin()
+      .from("sentence_segments")
+      .delete()
+      .eq("user_id", userId)
+      .in("id", idsToDelete);
+
+    if (error) {
+      fail("Failed to remove deleted segments", error);
     }
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
-    throw error;
-  }
-  return listSegmentsByMaterial(materialId);
-};
-
-export const updateSegmentTtsPath = (segmentId: string, ttsAudioPath: string | null) => {
-  getDb()
-    .prepare("UPDATE sentence_segments SET tts_audio_path = ? WHERE id = ?")
-    .run(ttsAudioPath, segmentId);
-};
-
-export const updateSegmentStarred = (segmentId: string, starred: boolean) => {
-  const segment = getSegment(segmentId);
-  if (!segment) {
-    throw new Error("Segment not found.");
   }
 
-  getDb()
-    .prepare("UPDATE sentence_segments SET starred = ? WHERE id = ?")
-    .run(starred ? 1 : 0, segmentId);
-
-  return getSegment(segmentId)!;
+  return result.sort((a, b) => a.index - b.index);
 };
 
-export const getSegment = (segmentId: string) => {
-  const row = getDb()
-    .prepare("SELECT * FROM sentence_segments WHERE id = ?")
-    .get(segmentId) as Record<string, unknown> | undefined;
+export const updateSegmentTtsPath = async (segmentId: string, ttsAudioPath: string | null) => {
+  const userId = await currentUserId();
+  const { error } = await admin()
+    .from("sentence_segments")
+    .update({ tts_audio_path: ttsAudioPath })
+    .eq("user_id", userId)
+    .eq("id", segmentId);
 
-  return row ? rowToSegment(row) : null;
+  if (error) {
+    fail("Failed to update TTS path", error);
+  }
 };
 
-export const createAttempt = (input: {
+export const updateSegmentStarred = async (segmentId: string, starred: boolean) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("sentence_segments")
+    .update({ starred })
+    .eq("user_id", userId)
+    .eq("id", segmentId)
+    .select("*")
+    .single();
+
+  if (error) {
+    fail("Failed to update segment star", error);
+  }
+
+  return rowToSegment(data);
+};
+
+export const getSegment = async (segmentId: string) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("sentence_segments")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("id", segmentId)
+    .maybeSingle();
+
+  if (error) {
+    fail("Failed to load segment", error);
+  }
+
+  return data ? rowToSegment(data) : null;
+};
+
+export const createAttempt = async (input: {
   id?: string;
   createdAt?: string;
   materialId: string;
-  segmentId: string;
+  segmentId: string | null;
   attemptAudioPath: string;
   feedbackJsonPath?: string | null;
   feedbackMarkdownPath?: string | null;
@@ -521,220 +349,236 @@ export const createAttempt = (input: {
   providerRawJson: unknown;
   analysisJson: unknown;
 }) => {
-  const id = input.id ?? createId();
-  const createdAt = input.createdAt ?? nowIso();
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .insert({
+      id: input.id ?? createId(),
+      user_id: userId,
+      material_id: input.materialId,
+      segment_id: input.segmentId,
+      attempt_audio_path: input.attemptAudioPath,
+      feedback_json_path: input.feedbackJsonPath ?? null,
+      feedback_markdown_path: input.feedbackMarkdownPath ?? null,
+      recognized_text: input.recognizedText,
+      pron_score: input.pronScore,
+      accuracy_score: input.accuracyScore,
+      fluency_score: input.fluencyScore,
+      completeness_score: input.completenessScore,
+      word_results_json: jsonStringify(input.wordResultsJson),
+      provider_raw_json: jsonStringify(input.providerRawJson),
+      analysis_json: jsonStringify(input.analysisJson),
+      created_at: input.createdAt ?? nowIso(),
+    })
+    .select("*")
+    .single();
 
-  getDb()
-    .prepare(
-      `
-        INSERT INTO practice_attempts (
-          id, material_id, segment_id, attempt_audio_path, recognized_text, pron_score, accuracy_score,
-          fluency_score, completeness_score, word_results_json, provider_raw_json, analysis_json,
-          feedback_json_path, feedback_markdown_path, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-    .run(
-      id,
-      input.materialId,
-      input.segmentId,
-      input.attemptAudioPath,
-      input.recognizedText,
-      input.pronScore,
-      input.accuracyScore,
-      input.fluencyScore,
-      input.completenessScore,
-      jsonStringify(input.wordResultsJson),
-      jsonStringify(input.providerRawJson),
-      jsonStringify(input.analysisJson),
-      input.feedbackJsonPath ?? null,
-      input.feedbackMarkdownPath ?? null,
-      createdAt,
-    );
+  if (error) {
+    fail("Failed to create attempt", error);
+  }
 
-  return getAttempt(id)!;
+  return rowToAttempt(data);
 };
 
-export const updateAttemptAnalysis = (
+export const updateAttemptAnalysis = async (
   attemptId: string,
-  patch: Pick<PracticeAttempt, "analysisJson" | "feedbackJsonPath" | "feedbackMarkdownPath">,
+  patch: {
+    analysisJson: unknown;
+    feedbackJsonPath?: string | null;
+    feedbackMarkdownPath?: string | null;
+  },
 ) => {
-  const attempt = getAttempt(attemptId);
-  if (!attempt) {
-    throw new Error("Attempt not found.");
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .update({
+      analysis_json: jsonStringify(patch.analysisJson),
+      feedback_json_path: patch.feedbackJsonPath ?? null,
+      feedback_markdown_path: patch.feedbackMarkdownPath ?? null,
+    })
+    .eq("user_id", userId)
+    .eq("id", attemptId)
+    .select("*")
+    .single();
+
+  if (error) {
+    fail("Failed to update attempt analysis", error);
   }
 
-  getDb()
-    .prepare(
-      `
-        UPDATE practice_attempts
-        SET analysis_json = ?,
-            feedback_json_path = ?,
-            feedback_markdown_path = ?
-        WHERE id = ?
-      `,
-    )
-    .run(
-      jsonStringify(patch.analysisJson),
-      patch.feedbackJsonPath,
-      patch.feedbackMarkdownPath,
-      attemptId,
-    );
-
-  return getAttempt(attemptId)!;
+  return rowToAttempt(data);
 };
 
-export const updateAttemptSegment = (attemptId: string, segmentId: string | null) => {
-  const attempt = getAttempt(attemptId);
-  if (!attempt) {
-    throw new Error("Attempt not found.");
+export const updateAttemptSegment = async (attemptId: string, segmentId: string | null) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .update({ segment_id: segmentId })
+    .eq("user_id", userId)
+    .eq("id", attemptId)
+    .select("*")
+    .single();
+
+  if (error) {
+    fail("Failed to update attempt association", error);
   }
 
-  getDb().prepare("UPDATE practice_attempts SET segment_id = ? WHERE id = ?").run(segmentId, attemptId);
-
-  return getAttempt(attemptId)!;
+  return rowToAttempt(data);
 };
 
-export const deleteAttempt = (attemptId: string) => {
-  const attempt = getAttempt(attemptId);
+export const deleteAttempt = async (attemptId: string) => {
+  const userId = await currentUserId();
+  const attempt = await getAttempt(attemptId);
   if (!attempt) {
     throw new Error("Attempt not found.");
   }
 
-  getDb().prepare("DELETE FROM practice_attempts WHERE id = ?").run(attemptId);
+  const { error } = await admin()
+    .from("practice_attempts")
+    .delete()
+    .eq("user_id", userId)
+    .eq("id", attemptId);
+
+  if (error) {
+    fail("Failed to delete attempt", error);
+  }
 
   return attempt;
 };
 
-export const getAttempt = (attemptId: string) => {
-  const row = getDb()
-    .prepare("SELECT * FROM practice_attempts WHERE id = ?")
-    .get(attemptId) as Record<string, unknown> | undefined;
+export const getAttempt = async (attemptId: string) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("id", attemptId)
+    .maybeSingle();
 
-  return row ? rowToAttempt(row) : null;
+  if (error) {
+    fail("Failed to load attempt", error);
+  }
+
+  return data ? rowToAttempt(data) : null;
 };
 
-export const listAttemptsForMaterial = (materialId: string) => {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT pa.*
-        FROM practice_attempts pa
-        WHERE pa.material_id = ?
-        ORDER BY datetime(pa.created_at) DESC
-      `,
-    )
-    .all(materialId) as Record<string, unknown>[];
+export const listAttemptsForMaterial = async (materialId: string) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("material_id", materialId)
+    .order("created_at", { ascending: false });
 
-  return rows.map(rowToAttempt);
+  if (error) {
+    fail("Failed to list attempts", error);
+  }
+
+  return (data ?? []).map(rowToAttempt);
 };
 
-export const listLatestAttemptsBySegment = (materialId: string) => {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT pa.*
-        FROM practice_attempts pa
-        INNER JOIN sentence_segments ss ON ss.id = pa.segment_id
-        INNER JOIN (
-          SELECT segment_id, MAX(datetime(created_at)) AS latest_created
-          FROM practice_attempts
-          GROUP BY segment_id
-        ) latest
-          ON latest.segment_id = pa.segment_id
-         AND latest.latest_created = datetime(pa.created_at)
-        WHERE ss.material_id = ?
-      `,
-    )
-    .all(materialId) as Record<string, unknown>[];
+export const listLatestAttemptsBySegment = async (materialId: string) => {
+  const attempts = await listAttemptsForMaterial(materialId);
+  const latest = new Map<string, PracticeAttempt>();
 
-  return rows.map(rowToAttempt);
+  for (const attempt of attempts) {
+    if (attempt.segmentId && !latest.has(attempt.segmentId)) {
+      latest.set(attempt.segmentId, attempt);
+    }
+  }
+
+  return latest;
 };
 
-export const listWeakPatterns = () => {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT *
-        FROM weak_patterns
-        ORDER BY severity DESC, evidence_count DESC, datetime(last_seen_at) DESC
-      `,
-    )
-    .all() as Record<string, unknown>[];
+export const listWeakPatterns = async () => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("weak_patterns")
+    .select("*")
+    .eq("user_id", userId)
+    .order("severity", { ascending: false })
+    .order("last_seen_at", { ascending: false });
 
-  return rows.map(rowToWeakPattern);
+  if (error) {
+    fail("Failed to list weak patterns", error);
+  }
+
+  return (data ?? []).map(rowToWeakPattern);
 };
 
-export const upsertWeakPattern = (input: {
+export const upsertWeakPattern = async (input: {
   patternType: WeakPattern["patternType"];
   patternKey: string;
   displayText: string;
   severity: number;
   lastSegmentText: string;
-  notesJson?: Record<string, unknown>;
+  notesJson: Record<string, unknown>;
 }) => {
-  const db = getDb();
-  const existing = db
-    .prepare(
-      "SELECT * FROM weak_patterns WHERE pattern_type = ? AND pattern_key = ?",
-    )
-    .get(input.patternType, input.patternKey) as Record<string, unknown> | undefined;
+  const userId = await currentUserId();
+  const { data: existing, error: existingError } = await admin()
+    .from("weak_patterns")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("pattern_type", input.patternType)
+    .eq("pattern_key", input.patternKey)
+    .maybeSingle();
+
+  if (existingError) {
+    fail("Failed to load weak pattern", existingError);
+  }
 
   if (!existing) {
-    const id = createId();
-    const lastSeenAt = nowIso();
+    const { data, error } = await admin()
+      .from("weak_patterns")
+      .insert({
+        id: createId(),
+        user_id: userId,
+        pattern_type: input.patternType,
+        pattern_key: input.patternKey,
+        display_text: input.displayText,
+        severity: input.severity,
+        evidence_count: 1,
+        last_seen_at: nowIso(),
+        last_segment_text: input.lastSegmentText,
+        notes_json: jsonStringify(input.notesJson),
+      })
+      .select("*")
+      .single();
 
-    db.prepare(
-      `
-        INSERT INTO weak_patterns (
-          id, pattern_type, pattern_key, display_text, severity, evidence_count,
-          last_seen_at, last_segment_text, notes_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    ).run(
-      id,
-      input.patternType,
-      input.patternKey,
-      input.displayText,
-      input.severity,
-      1,
-      lastSeenAt,
-      input.lastSegmentText,
-      jsonStringify(input.notesJson ?? {}),
-    );
+    if (error) {
+      fail("Failed to create weak pattern", error);
+    }
 
-    return listWeakPatterns().find((pattern) => pattern.id === id)!;
+    return rowToWeakPattern(data);
   }
 
   const current = rowToWeakPattern(existing);
-  db.prepare(
-    `
-      UPDATE weak_patterns
-      SET display_text = ?,
-          severity = ?,
-          evidence_count = ?,
-          last_seen_at = ?,
-          last_segment_text = ?,
-          notes_json = ?
-      WHERE id = ?
-    `,
-  ).run(
-    input.displayText,
-    Math.max(current.severity, input.severity),
-    current.evidenceCount + 1,
-    nowIso(),
-    input.lastSegmentText,
-    jsonStringify({
-      ...current.notesJson,
-      ...(input.notesJson ?? {}),
-    }),
-    current.id,
-  );
+  const { data, error } = await admin()
+    .from("weak_patterns")
+    .update({
+      display_text: input.displayText,
+      severity: Math.max(current.severity, input.severity),
+      evidence_count: current.evidenceCount + 1,
+      last_seen_at: nowIso(),
+      last_segment_text: input.lastSegmentText,
+      notes_json: jsonStringify({
+        ...current.notesJson,
+        ...input.notesJson,
+      }),
+    })
+    .eq("user_id", userId)
+    .eq("id", current.id)
+    .select("*")
+    .single();
 
-  return listWeakPatterns().find((pattern) => pattern.id === current.id)!;
+  if (error) {
+    fail("Failed to update weak pattern", error);
+  }
+
+  return rowToWeakPattern(data);
 };
 
-export const addWeakPatternEvidence = (input: {
+export const addWeakPatternEvidence = async (input: {
   weakPatternId: string;
   attemptId: string;
   segmentId: string;
@@ -742,38 +586,40 @@ export const addWeakPatternEvidence = (input: {
   score: number | null;
   errorType: string | null;
 }) => {
-  getDb()
-    .prepare(
-      `
-        INSERT INTO weak_pattern_evidence (
-          id, weak_pattern_id, attempt_id, segment_id, token, score, error_type, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-    )
-    .run(
-      createId(),
-      input.weakPatternId,
-      input.attemptId,
-      input.segmentId,
-      input.token,
-      input.score,
-      input.errorType,
-      nowIso(),
-    );
+  const userId = await currentUserId();
+  const { error } = await admin().from("weak_pattern_evidence").insert({
+    id: createId(),
+    user_id: userId,
+    weak_pattern_id: input.weakPatternId,
+    attempt_id: input.attemptId,
+    segment_id: input.segmentId,
+    token: input.token,
+    score: input.score,
+    error_type: input.errorType,
+    created_at: nowIso(),
+  });
+
+  if (error) {
+    fail("Failed to add weak pattern evidence", error);
+  }
 };
 
-export const listWeakPatternEvidenceForKey = (patternType: string, patternKey: string) => {
-  const rows = getDb()
-    .prepare(
-      `
-        SELECT wpe.*
-        FROM weak_pattern_evidence wpe
-        INNER JOIN weak_patterns wp ON wp.id = wpe.weak_pattern_id
-        WHERE wp.pattern_type = ? AND wp.pattern_key = ?
-        ORDER BY datetime(wpe.created_at) DESC
-      `,
-    )
-    .all(patternType, patternKey) as Record<string, unknown>[];
+export const listWeakPatternEvidenceForKey = async (
+  patternType: string,
+  patternKey: string,
+) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("weak_pattern_evidence")
+    .select("*, weak_patterns!inner(pattern_type, pattern_key)")
+    .eq("user_id", userId)
+    .eq("weak_patterns.pattern_type", patternType)
+    .eq("weak_patterns.pattern_key", patternKey)
+    .order("created_at", { ascending: false });
 
-  return rows;
+  if (error) {
+    fail("Failed to list weak pattern evidence", error);
+  }
+
+  return data ?? [];
 };

@@ -3,6 +3,9 @@ import { notFound } from "next/navigation";
 import { SegmentEditor } from "@/components/segment-editor";
 import { getMaterialEditorView } from "@/lib/services";
 import { storageUrl } from "@/lib/storage";
+import { requirePageUser } from "@/lib/auth";
+
+export const dynamic = "force-dynamic";
 
 export default async function MaterialEditPage({
   params,
@@ -10,8 +13,9 @@ export default async function MaterialEditPage({
   params: Promise<{ id: string }>;
 }) {
   try {
+    await requirePageUser();
     const { id } = await params;
-    const view = getMaterialEditorView(id);
+    const view = await getMaterialEditorView(id);
 
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-6 px-5 py-8 md:px-8">

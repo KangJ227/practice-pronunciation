@@ -1,5 +1,5 @@
 import path from "node:path";
-import { getAttemptFeedbackPaths, writeAttemptFeedbackArtifacts } from "@/lib/attempt-feedback";
+import { writeAttemptFeedbackArtifacts } from "@/lib/attempt-feedback";
 import { appConfig, isAzureSpeechConfigured } from "@/lib/config";
 import {
   addWeakPatternEvidence,
@@ -83,8 +83,8 @@ const normalizeSegments = (segments: EditableSegmentInput[]) =>
     }))
     .filter((segment) => segment.text);
 
-export const getDashboardMaterials = () =>
-  listMaterials().map((material) => ({
+export const getDashboardMaterials = async () =>
+  (await listMaterials()).map((material) => ({
     ...material,
     practiceHref: `/materials/${material.id}/practice`,
     editHref: `/materials/${material.id}/edit`,
@@ -103,7 +103,7 @@ export const createTextMaterialWorkflow = async (input: {
     throw new Error("Please provide some French text to practice.");
   }
 
-  const material = createMaterial({
+  const material = await createMaterial({
     kind: "text",
     locale,
     title: input.title.trim() || inferTitle(sentences[0]),
@@ -112,7 +112,7 @@ export const createTextMaterialWorkflow = async (input: {
     statusDetail: null,
   });
 
-  const segments = replaceSegments(
+  const segments = await replaceSegments(
     material.id,
     sentences.map((sentence, index) => ({
       index,
@@ -126,8 +126,8 @@ export const createTextMaterialWorkflow = async (input: {
   await generateReferenceAudio(material, segments);
 
   return {
-    material: getMaterial(material.id)!,
-    segments: listSegmentsByMaterial(material.id),
+    material: (await getMaterial(material.id))!,
+    segments: await listSegmentsByMaterial(material.id),
   };
 };
 
@@ -137,7 +137,7 @@ export const createAudioMaterialWorkflow = async (input: {
   locale?: string;
 }) => {
   const locale = input.locale ?? appConfig.locale;
-  const material = createMaterial({
+  const material = await createMaterial({
     kind: "audio",
     locale,
     title: input.title.trim() || stripExtension(input.file.name),
@@ -148,11 +148,11 @@ export const createAudioMaterialWorkflow = async (input: {
 
   const saved = await saveUploadedFile(input.file, `materials/${material.id}/source`, "source");
   await ensureMaterialAudioLimit(saved.fullPath);
-  updateMaterial(material.id, { sourceAudioPath: saved.storageKey });
+  await updateMaterial(material.id, { sourceAudioPath: saved.storageKey });
 
   if (!isAzureSpeechConfigured()) {
     return {
-      material: updateMaterial(material.id, {
+      material: await updateMaterial(material.id, {
         status: "needs-config",
         statusDetail:
           "Azure Speech is required to transcribe uploaded audio. The source audio is saved and can be processed once credentials are configured.",
@@ -183,7 +183,7 @@ export const createAudioMaterialWorkflow = async (input: {
     }
 
     const initialSegments = buildSegmentsFromTranscription(transcription);
-    const persistedSegments = replaceSegments(material.id, initialSegments);
+    const persistedSegments = await replaceSegments(material.id, initialSegments);
 
     await updateMaterial(material.id, {
       sourceText: transcription.fullText || joinSegmentsText(persistedSegments),
@@ -192,16 +192,16 @@ export const createAudioMaterialWorkflow = async (input: {
         "Review the transcript and merge or split any lines before starting practice.",
     });
 
-    await generateReferenceAudio(getMaterial(material.id)!, persistedSegments);
+    await generateReferenceAudio((await getMaterial(material.id))!, persistedSegments);
 
     return {
-      material: getMaterial(material.id)!,
-      segments: listSegmentsByMaterial(material.id),
+      material: (await getMaterial(material.id))!,
+      segments: await listSegmentsByMaterial(material.id),
       transcription,
     };
   } catch (error) {
     return {
-      material: updateMaterial(material.id, {
+      material: await updateMaterial(material.id, {
         status: "error",
         statusDetail: error instanceof Error ? error.message : "Audio transcription failed.",
       }),
@@ -215,7 +215,7 @@ export const updateMaterialSegmentsWorkflow = async (
   materialId: string,
   segments: EditableSegmentInput[],
 ) => {
-  const material = getMaterial(materialId);
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
@@ -225,32 +225,32 @@ export const updateMaterialSegmentsWorkflow = async (
     throw new Error("At least one sentence is required.");
   }
 
-  const persisted = replaceSegments(materialId, normalized);
+  const persisted = await replaceSegments(materialId, normalized);
   const sourceText = joinSegmentsText(persisted);
-  updateMaterial(materialId, {
+  await updateMaterial(materialId, {
     sourceText,
     status: "ready",
     statusDetail: "Segments saved. You can start practice now.",
   });
 
-  await generateReferenceAudio(getMaterial(materialId)!, persisted);
+  await generateReferenceAudio((await getMaterial(materialId))!, persisted);
 
   return {
-    material: getMaterial(materialId)!,
-    segments: listSegmentsByMaterial(materialId),
+    material: (await getMaterial(materialId))!,
+    segments: await listSegmentsByMaterial(materialId),
   };
 };
 
-export const getMaterialEditorView = (materialId: string) => {
-  const material = getMaterial(materialId);
+export const getMaterialEditorView = async (materialId: string) => {
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
-  const practice = getPracticeMaterialView(materialId);
+  const practice = await getPracticeMaterialView(materialId);
 
   return {
     material,
-    segments: listSegmentsByMaterial(materialId),
+    segments: await listSegmentsByMaterial(materialId),
     attemptsBySegment: Object.fromEntries(
       practice.segments.map((segment) => [segment.id, segment.attempts]),
     ),
@@ -258,16 +258,16 @@ export const getMaterialEditorView = (materialId: string) => {
   };
 };
 
-export const getPracticeMaterialView = (materialId: string): PracticeMaterialView => {
-  const material = getMaterial(materialId);
+export const getPracticeMaterialView = async (materialId: string): Promise<PracticeMaterialView> => {
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
 
-  const segments = listSegmentsByMaterial(materialId);
+  const segments = await listSegmentsByMaterial(materialId);
   const attemptsBySegment = new Map<string, PracticeAttempt[]>();
   const unlinkedAttempts: PracticeAttempt[] = [];
-  for (const attempt of listAttemptsForMaterial(materialId)) {
+  for (const attempt of await listAttemptsForMaterial(materialId)) {
     if (!attempt.segmentId) {
       unlinkedAttempts.push(attempt);
       continue;
@@ -281,7 +281,7 @@ export const getPracticeMaterialView = (materialId: string): PracticeMaterialVie
 
     attemptsBySegment.set(attempt.segmentId, [attempt]);
   }
-  const weakPatterns = listWeakPatterns();
+  const weakPatterns = await listWeakPatterns();
 
   return {
     material,
@@ -299,8 +299,8 @@ export const getPracticeMaterialView = (materialId: string): PracticeMaterialVie
   };
 };
 
-export const recomputeHighlightsWorkflow = (materialId: string) => {
-  const view = getPracticeMaterialView(materialId);
+export const recomputeHighlightsWorkflow = async (materialId: string) => {
+  const view = await getPracticeMaterialView(materialId);
 
   return {
     highlightMap: Object.fromEntries(
@@ -314,7 +314,7 @@ export const deleteMaterialWorkflow = async (
   materialId: string,
   options: { onlyIfError?: boolean } = {},
 ) => {
-  const material = getMaterial(materialId);
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
@@ -322,8 +322,8 @@ export const deleteMaterialWorkflow = async (
     throw new Error("Only ERROR sessions can be deleted from this action.");
   }
 
-  const segments = listSegmentsByMaterial(materialId);
-  const attempts = listAttemptsForMaterial(materialId);
+  const segments = await listSegmentsByMaterial(materialId);
+  const attempts = await listAttemptsForMaterial(materialId);
   const storageKeys = [
     material.sourceAudioPath,
     ...segments.map((segment) => segment.ttsAudioPath),
@@ -334,7 +334,7 @@ export const deleteMaterialWorkflow = async (
     ]),
   ].filter((storageKey): storageKey is string => Boolean(storageKey));
 
-  deleteMaterial(materialId);
+  await deleteMaterial(materialId);
 
   await Promise.all([
     ...storageKeys.map((storageKey) => removeStorageFile(storageKey)),
@@ -345,7 +345,7 @@ export const deleteMaterialWorkflow = async (
 };
 
 export const deleteErrorMaterialsWorkflow = async () => {
-  const errorMaterials = listMaterials().filter((material) => material.status === "error");
+  const errorMaterials = (await listMaterials()).filter((material) => material.status === "error");
 
   for (const material of errorMaterials) {
     await deleteMaterialWorkflow(material.id, { onlyIfError: true });
@@ -361,28 +361,28 @@ export const updateAttemptAssociationWorkflow = async (input: {
   attemptId: string;
   segmentId: string | null;
 }) => {
-  const attempt = getAttempt(input.attemptId);
+  const attempt = await getAttempt(input.attemptId);
   if (!attempt) {
     throw new Error("Attempt not found.");
   }
 
   if (input.segmentId) {
-    const segment = getSegment(input.segmentId);
+    const segment = await getSegment(input.segmentId);
     if (!segment || segment.materialId !== attempt.materialId) {
       throw new Error("Target segment not found for this material.");
     }
   }
 
-  const updatedAttempt = updateAttemptSegment(input.attemptId, input.segmentId);
+  const updatedAttempt = await updateAttemptSegment(input.attemptId, input.segmentId);
 
   return {
     attempt: updatedAttempt,
-    practice: getPracticeMaterialView(attempt.materialId),
+    practice: await getPracticeMaterialView(attempt.materialId),
   };
 };
 
 export const deleteAttemptWorkflow = async (attemptId: string) => {
-  const attempt = getAttempt(attemptId);
+  const attempt = await getAttempt(attemptId);
   if (!attempt) {
     throw new Error("Attempt not found.");
   }
@@ -393,12 +393,12 @@ export const deleteAttemptWorkflow = async (attemptId: string) => {
     attempt.feedbackMarkdownPath,
   ].filter((storageKey): storageKey is string => Boolean(storageKey));
 
-  const deletedAttempt = deleteAttempt(attemptId);
+  const deletedAttempt = await deleteAttempt(attemptId);
   await Promise.all(storageKeys.map((storageKey) => removeStorageFile(storageKey)));
 
   return {
     attempt: deletedAttempt,
-    practice: getPracticeMaterialView(deletedAttempt.materialId),
+    practice: await getPracticeMaterialView(deletedAttempt.materialId),
   };
 };
 
@@ -406,16 +406,16 @@ export const updateSegmentStarredWorkflow = async (input: {
   segmentId: string;
   starred: boolean;
 }) => {
-  const segment = getSegment(input.segmentId);
+  const segment = await getSegment(input.segmentId);
   if (!segment) {
     throw new Error("Segment not found.");
   }
 
-  const updatedSegment = updateSegmentStarred(input.segmentId, input.starred);
+  const updatedSegment = await updateSegmentStarred(input.segmentId, input.starred);
 
   return {
     segment: updatedSegment,
-    practice: getPracticeMaterialView(updatedSegment.materialId),
+    practice: await getPracticeMaterialView(updatedSegment.materialId),
   };
 };
 
@@ -423,12 +423,12 @@ export const submitAttemptWorkflow = async (input: {
   segmentId: string;
   file: File;
 }) => {
-  const segment = getSegment(input.segmentId);
+  const segment = await getSegment(input.segmentId);
   if (!segment) {
     throw new Error("Segment not found.");
   }
 
-  const material = getMaterial(segment.materialId);
+  const material = await getMaterial(segment.materialId);
   if (!material) {
     throw new Error("Parent material not found.");
   }
@@ -470,7 +470,7 @@ export const submitAttemptWorkflow = async (input: {
     createdAt,
   };
 
-  const attempt = createAttempt({
+  const attempt = await createAttempt({
     id: attemptDraft.id,
     createdAt: attemptDraft.createdAt,
     materialId: material.id,
@@ -490,12 +490,12 @@ export const submitAttemptWorkflow = async (input: {
 
   return {
     attempt,
-    practice: getPracticeMaterialView(segment.materialId),
+    practice: await getPracticeMaterialView(segment.materialId),
   };
 };
 
 export const analyzeAttemptWorkflow = async (attemptId: string) => {
-  const attempt = getAttempt(attemptId);
+  const attempt = await getAttempt(attemptId);
   if (!attempt) {
     throw new Error("Attempt not found.");
   }
@@ -503,12 +503,12 @@ export const analyzeAttemptWorkflow = async (attemptId: string) => {
     throw new Error("Please re-associate this recording with a sentence before generating AI feedback.");
   }
 
-  const segment = getSegment(attempt.segmentId);
+  const segment = await getSegment(attempt.segmentId);
   if (!segment) {
     throw new Error("Segment not found.");
   }
 
-  const material = getMaterial(segment.materialId);
+  const material = await getMaterial(segment.materialId);
   if (!material) {
     throw new Error("Parent material not found.");
   }
@@ -522,24 +522,21 @@ export const analyzeAttemptWorkflow = async (attemptId: string) => {
     fluencyScore: attempt.fluencyScore,
     completenessScore: attempt.completenessScore,
     wordResults: attempt.wordResultsJson,
-    history: listWeakPatterns(),
+    history: await listWeakPatterns(),
   });
 
-  const feedbackPaths = getAttemptFeedbackPaths(attempt);
   const analyzedAttempt: PracticeAttempt = {
     ...attempt,
-    feedbackJsonPath: feedbackPaths.feedbackJsonPath,
-    feedbackMarkdownPath: feedbackPaths.feedbackMarkdownPath,
     analysisJson: analysis,
   };
 
-  await writeAttemptFeedbackArtifacts({
+  const feedbackPaths = await writeAttemptFeedbackArtifacts({
     material,
     segment,
     attempt: analyzedAttempt,
   });
 
-  const updatedAttempt = updateAttemptAnalysis(attempt.id, {
+  const updatedAttempt = await updateAttemptAnalysis(attempt.id, {
     analysisJson: analysis,
     feedbackJsonPath: feedbackPaths.feedbackJsonPath,
     feedbackMarkdownPath: feedbackPaths.feedbackMarkdownPath,
@@ -554,9 +551,9 @@ export const analyzeAttemptWorkflow = async (attemptId: string) => {
     });
   }
 
-  return {
+    return {
     attempt: updatedAttempt,
-    practice: getPracticeMaterialView(segment.materialId),
+    practice: await getPracticeMaterialView(segment.materialId),
   };
 };
 
@@ -626,11 +623,11 @@ const rememberWeakPatterns = async (input: {
     const patternType = hasStrongError
       ? ("omission_insertion" as const)
       : inferWeakPatternTypeForToken(normalizedWord);
-    const evidence = listWeakPatternEvidenceForKey(patternType, normalizedWord);
+    const evidence = await listWeakPatternEvidenceForKey(patternType, normalizedWord);
 
     if (!hasStrongError && evidence.length === 0) {
       // First low-score exact-word evidence only seeds memory; highlight starts on the second hit.
-      const existing = upsertWeakPattern({
+      const existing = await upsertWeakPattern({
         patternType,
         patternKey: normalizedWord,
         displayText: word.word,
@@ -640,7 +637,7 @@ const rememberWeakPatterns = async (input: {
           reason: "Repeated low word score from Azure pronunciation assessment.",
         },
       });
-      addWeakPatternEvidence({
+      await addWeakPatternEvidence({
         weakPatternId: existing.id,
         attemptId: input.attemptId,
         segmentId: input.segment.id,
@@ -652,7 +649,7 @@ const rememberWeakPatterns = async (input: {
       continue;
     }
 
-    const weakPattern = upsertWeakPattern({
+    const weakPattern = await upsertWeakPattern({
       patternType,
       patternKey: normalizedWord,
       displayText: word.word,
@@ -664,7 +661,7 @@ const rememberWeakPatterns = async (input: {
           : "This word has scored low more than once.",
       },
     });
-    addWeakPatternEvidence({
+    await addWeakPatternEvidence({
       weakPatternId: weakPattern.id,
       attemptId: input.attemptId,
       segmentId: input.segment.id,
@@ -681,7 +678,7 @@ const rememberWeakPatterns = async (input: {
       continue;
     }
 
-    const weakPattern = upsertWeakPattern({
+    const weakPattern = await upsertWeakPattern({
       patternType: pattern.type,
       patternKey: pattern.key,
       displayText: pattern.displayText,
@@ -692,7 +689,7 @@ const rememberWeakPatterns = async (input: {
       },
     });
 
-    addWeakPatternEvidence({
+    await addWeakPatternEvidence({
       weakPatternId: weakPattern.id,
       attemptId: input.attemptId,
       segmentId: input.segment.id,
@@ -708,7 +705,7 @@ const generateReferenceAudio = async (
   segments: SentenceSegment[],
 ) => {
   if (!isAzureSpeechConfigured()) {
-    updateMaterial(material.id, {
+    await updateMaterial(material.id, {
       statusDetail: material.statusDetail || ttsErrorMessage,
     });
     return;
@@ -726,9 +723,9 @@ const generateReferenceAudio = async (
         `segment-${segment.index + 1}.mp3`,
         audioBuffer,
       );
-      updateSegmentTtsPath(segment.id, storageKey);
+      await updateSegmentTtsPath(segment.id, storageKey);
     } catch (error) {
-      updateMaterial(material.id, {
+      await updateMaterial(material.id, {
         statusDetail:
           error instanceof Error ? error.message : "Reference audio generation failed.",
       });
@@ -773,13 +770,13 @@ export const expandSegmentByAutoSplit = (segment: EditableSegmentInput) => {
   }));
 };
 
-export const materialMedia = (materialId: string) => {
-  const material = getMaterial(materialId);
+export const materialMedia = async (materialId: string) => {
+  const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
   }
 
-  const segments = listSegmentsByMaterial(materialId).map((segment) => ({
+  const segments = (await listSegmentsByMaterial(materialId)).map((segment) => ({
     ...segment,
     ttsUrl: storageUrl(segment.ttsAudioPath),
   }));
@@ -790,7 +787,7 @@ export const materialMedia = (materialId: string) => {
       sourceAudioUrl: storageUrl(material.sourceAudioPath),
     },
     segments,
-    attempts: listAttemptsForMaterial(materialId).map((attempt) => ({
+    attempts: (await listAttemptsForMaterial(materialId)).map((attempt) => ({
       ...attempt,
       attemptAudioUrl: storageUrl(attempt.attemptAudioPath),
     })),
