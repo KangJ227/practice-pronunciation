@@ -14,7 +14,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     environment:
-      name: Common
+      name: Production
 
     steps:
       - name: Checkout
@@ -57,7 +57,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: verify
     environment:
-      name: Common
+      name: Production
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
       SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
@@ -84,7 +84,7 @@ jobs:
       - verify
       - migrate
     environment:
-      name: Common
+      name: Production
       url: ${{ steps.deploy.outputs.url }}
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
