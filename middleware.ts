@@ -14,10 +14,7 @@ const unauthorized = (status: 401 | 403 | 500, message: string) =>
   NextResponse.json({ error: message, details: null }, { status });
 
 const sessionSecret = () =>
-  process.env.APP_SESSION_SECRET ||
-  process.env.AUTH_SECRET ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  "";
+  process.env.APP_SESSION_SECRET || process.env.AUTH_SECRET || "";
 
 const sign = async (data: string) => {
   const secret = sessionSecret();

@@ -19,12 +19,12 @@ const base64UrlEncode = (value: string) =>
 const base64UrlDecode = (value: string) =>
   Buffer.from(value, "base64url").toString("utf8");
 
-const sessionSecret = () => appConfig.appSessionSecret || appConfig.supabaseServiceRoleKey;
+const sessionSecret = () => appConfig.appSessionSecret;
 
 const hmac = async (data: string) => {
   const secret = sessionSecret();
   if (!secret) {
-    throw new Error("APP_SESSION_SECRET or SUPABASE_SERVICE_ROLE_KEY is required.");
+    throw new Error("APP_SESSION_SECRET is required.");
   }
 
   const key = await crypto.subtle.importKey(
