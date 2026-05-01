@@ -1,29 +1,18 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
-import { createClient } from "@/lib/supabase/browser";
+import { useState, type FormEvent } from "react";
 
 export function LoginForm({
-  allowedEmail,
   denied,
   next,
 }: {
-  allowedEmail: string;
   denied: boolean;
   next: string;
 }) {
-  const [email, setEmail] = useState(allowedEmail);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [message, setMessage] = useState("");
-  const redirectTo = useMemo(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-
-    const callback = new URL("/auth/callback", window.location.origin);
-    callback.searchParams.set("next", next || "/");
-    return callback.toString();
-  }, [next]);
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -31,31 +20,28 @@ export function LoginForm({
     setMessage("");
 
     try {
-      if (!allowedEmail) {
-        throw new Error("ALLOWED_LOGIN_EMAIL is not configured.");
-      }
-
-      if (allowedEmail && email.trim().toLowerCase() !== allowedEmail) {
-        throw new Error("This email is not allowed to use this app.");
-      }
-
-      const supabase = createClient();
-      const { error } = await supabase.auth.signInWithOtp({
-        email: email.trim(),
-        options: {
-          emailRedirectTo: redirectTo,
+      const response = await fetch("/api/login", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
         },
+        body: JSON.stringify({
+          username,
+          password,
+          next,
+        }),
       });
 
-      if (error) {
-        throw error;
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "Could not sign in.");
       }
 
       setStatus("sent");
-      setMessage("Magic link sent. Open it from your email to continue.");
+      window.location.assign(next || "/");
     } catch (error) {
       setStatus("error");
-      setMessage(error instanceof Error ? error.message : "Could not send login link.");
+      setMessage(error instanceof Error ? error.message : "Could not sign in.");
     }
   };
 
@@ -68,15 +54,30 @@ export function LoginForm({
       ) : null}
       <label className="block">
         <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brass">
-          Email
+          Username
         </span>
         <input
-          type="email"
+          type="text"
           required
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
+          autoComplete="username"
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
           className="mt-2 w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-base text-ink outline-none ring-berry/20 transition focus:ring-4"
-          placeholder="you@example.com"
+          placeholder="username"
+        />
+      </label>
+      <label className="block">
+        <span className="text-xs font-semibold uppercase tracking-[0.18em] text-brass">
+          Password
+        </span>
+        <input
+          type="password"
+          required
+          autoComplete="current-password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          className="mt-2 w-full rounded-2xl border border-black/10 bg-white px-4 py-3 text-base text-ink outline-none ring-berry/20 transition focus:ring-4"
+          placeholder="password"
         />
       </label>
       <button
@@ -84,7 +85,7 @@ export function LoginForm({
         disabled={status === "sending"}
         className="w-full rounded-full bg-berry px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-berry/90 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {status === "sending" ? "Sending..." : "Send magic link"}
+        {status === "sending" ? "Signing in..." : "Sign in"}
       </button>
       {message ? (
         <p

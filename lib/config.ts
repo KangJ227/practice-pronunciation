@@ -13,7 +13,7 @@ export const appConfig = {
   supabasePublishableKey: read("NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY", "NEXT_PUBLIC_SUPABASE_ANON_KEY"),
   supabaseServiceRoleKey: read("SUPABASE_SERVICE_ROLE_KEY"),
   supabaseStorageBucket: read("SUPABASE_STORAGE_BUCKET") || "practice-media",
-  allowedLoginEmail: read("ALLOWED_LOGIN_EMAIL").toLowerCase(),
+  appSessionSecret: read("APP_SESSION_SECRET", "AUTH_SECRET"),
   maxAudioMinutes: Number(read("MAX_AUDIO_MINUTES") || 10),
   maxAttemptSeconds: Number(read("MAX_ATTEMPT_SECONDS") || 20),
 };

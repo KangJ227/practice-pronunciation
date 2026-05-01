@@ -1,22 +1,70 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createServerClient } from "@supabase/ssr";
-import { appConfig } from "@/lib/config";
+
+const sessionCookieName = "practice_session";
+const encoder = new TextEncoder();
 
 const isPublicPath = (pathname: string) =>
   pathname === "/login" ||
   pathname === "/auth/callback" ||
+  pathname === "/api/login" ||
   pathname.startsWith("/_next/") ||
   pathname === "/favicon.ico";
 
 const unauthorized = (status: 401 | 403 | 500, message: string) =>
   NextResponse.json({ error: message, details: null }, { status });
 
-const isAllowedUser = (user: { email?: string | null } | null) =>
-  Boolean(
-    user?.email &&
-      appConfig.allowedLoginEmail &&
-      user.email.toLowerCase() === appConfig.allowedLoginEmail,
+const sessionSecret = () =>
+  process.env.APP_SESSION_SECRET ||
+  process.env.AUTH_SECRET ||
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  "";
+
+const sign = async (data: string) => {
+  const secret = sessionSecret();
+  if (!secret) {
+    return "";
+  }
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
   );
+  const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(data));
+  const bytes = Array.from(new Uint8Array(signature), (byte) =>
+    String.fromCharCode(byte),
+  ).join("");
+  return btoa(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+};
+
+const isValidSessionCookie = async (token: string | undefined) => {
+  if (!token) {
+    return false;
+  }
+
+  const [payload, signature] = token.split(".");
+  if (!payload || !signature) {
+    return false;
+  }
+
+  if (signature !== await sign(payload)) {
+    return false;
+  }
+
+  try {
+    const decodedPayload = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const paddedPayload = decodedPayload.padEnd(
+      decodedPayload.length + ((4 - (decodedPayload.length % 4)) % 4),
+      "=",
+    );
+    const parsed = JSON.parse(atob(paddedPayload)) as { exp?: number };
+    return Boolean(parsed.exp && parsed.exp >= Math.floor(Date.now() / 1000));
+  } catch {
+    return false;
+  }
+};
 
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
@@ -25,40 +73,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  let response = NextResponse.next({
-    request,
-  });
-
-  if (!appConfig.supabaseUrl || !appConfig.supabasePublishableKey) {
-    return pathname.startsWith("/api/")
-      ? unauthorized(500, "Supabase is not configured.")
-      : NextResponse.redirect(new URL("/login", request.url));
-  }
-
-  const supabase = createServerClient(
-    appConfig.supabaseUrl,
-    appConfig.supabasePublishableKey,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options),
-          );
-        },
-      },
-    },
-  );
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (!user) {
+  if (!(await isValidSessionCookie(request.cookies.get(sessionCookieName)?.value))) {
     if (pathname.startsWith("/api/")) {
       return unauthorized(401, "Authentication required.");
     }
@@ -68,17 +83,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.redirect(loginUrl);
   }
 
-  if (!isAllowedUser(user)) {
-    await supabase.auth.signOut();
-
-    if (pathname.startsWith("/api/")) {
-      return unauthorized(403, "This account is not allowed to use this app.");
-    }
-
-    return NextResponse.redirect(new URL("/login?denied=1", request.url));
-  }
-
-  return response;
+  return NextResponse.next({ request });
 }
 
 export const config = {

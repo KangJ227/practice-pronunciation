@@ -38,7 +38,7 @@ A private French pronunciation practice web app built with Next.js, Supabase, Az
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-ALLOWED_LOGIN_EMAIL=
+APP_SESSION_SECRET=
 SUPABASE_STORAGE_BUCKET=practice-media
 ```
 
@@ -58,11 +58,40 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Accounts
+
+The app uses local username/password accounts stored in Supabase tables. Create an
+account directly in SQL:
+
+```sql
+insert into public.app_users (username, password_hash)
+values ('jing', crypt('change-this-password', gen_salt('bf')));
+```
+
+Usernames must be lowercase. Passwords are checked with Postgres `pgcrypto`
+`crypt()`, so do not store plaintext passwords.
+
+If you already have materials from the previous Supabase Auth login, attach the
+new login to that existing `user_id` instead:
+
+```sql
+update public.app_users
+set username = 'jing',
+    password_hash = crypt('change-this-password', gen_salt('bf')),
+    is_active = true
+where id = (
+  select user_id
+  from public.materials
+  order by created_at desc
+  limit 1
+);
+```
+
 ## Important behavior
 
 - Text materials still work without Azure credentials, but TTS generation is skipped.
 - Audio materials are saved even without Azure credentials, but transcription stays unavailable until Azure Speech is configured.
-- The app is private: pages, APIs, and media require Supabase login with `ALLOWED_LOGIN_EMAIL`.
+- The app is private: pages, APIs, and media require a valid app account session.
 - Practice attempts are always stored; if Azure or Kimi is unavailable, the app falls back to degraded feedback instead of dropping the upload.
 - Each saved attempt also writes feedback artifacts to Supabase Storage as `.json` and `.md`.
 - Weak-word highlighting appears after repeated low scores, or after a single omission/insertion error.
@@ -80,7 +109,7 @@ Add these GitHub repository secrets:
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY
-ALLOWED_LOGIN_EMAIL
+APP_SESSION_SECRET
 SUPABASE_ACCESS_TOKEN
 SUPABASE_PROJECT_ID
 SUPABASE_DB_PASSWORD
