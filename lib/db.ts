@@ -36,6 +36,95 @@ const ensureColumnExists = (
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 };
 
+const tableExists = (db: DatabaseSync, tableName: string) =>
+  Boolean(
+    db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get(tableName),
+  );
+
+const recreatePracticeAttemptsTable = (db: DatabaseSync, hasMaterialId: boolean) => {
+  db.exec("PRAGMA foreign_keys = OFF;");
+  db.exec("BEGIN");
+
+  try {
+    const materialIdSelect = hasMaterialId ? "pa.material_id" : "ss.material_id";
+    db.exec(`
+      CREATE TABLE practice_attempts_new (
+        id TEXT PRIMARY KEY,
+        material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+        segment_id TEXT REFERENCES sentence_segments(id) ON DELETE SET NULL,
+        attempt_audio_path TEXT NOT NULL,
+        recognized_text TEXT NOT NULL DEFAULT '',
+        pron_score REAL,
+        accuracy_score REAL,
+        fluency_score REAL,
+        completeness_score REAL,
+        word_results_json TEXT NOT NULL,
+        provider_raw_json TEXT NOT NULL,
+        analysis_json TEXT NOT NULL,
+        feedback_json_path TEXT,
+        feedback_markdown_path TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      INSERT INTO practice_attempts_new (
+        id, material_id, segment_id, attempt_audio_path, recognized_text, pron_score,
+        accuracy_score, fluency_score, completeness_score, word_results_json, provider_raw_json,
+        analysis_json, feedback_json_path, feedback_markdown_path, created_at
+      )
+      SELECT
+        pa.id,
+        ${materialIdSelect},
+        pa.segment_id,
+        pa.attempt_audio_path,
+        pa.recognized_text,
+        pa.pron_score,
+        pa.accuracy_score,
+        pa.fluency_score,
+        pa.completeness_score,
+        pa.word_results_json,
+        pa.provider_raw_json,
+        pa.analysis_json,
+        pa.feedback_json_path,
+        pa.feedback_markdown_path,
+        pa.created_at
+      FROM practice_attempts pa
+      LEFT JOIN sentence_segments ss ON ss.id = pa.segment_id;
+
+      DROP TABLE practice_attempts;
+      ALTER TABLE practice_attempts_new RENAME TO practice_attempts;
+      CREATE INDEX idx_practice_attempts_segment_created
+        ON practice_attempts (segment_id, created_at DESC);
+      CREATE INDEX idx_practice_attempts_material_created
+        ON practice_attempts (material_id, created_at DESC);
+    `);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON;");
+  }
+};
+
+const ensurePracticeAttemptsSchema = (db: DatabaseSync) => {
+  const foreignKeys = db
+    .prepare("PRAGMA foreign_key_list(practice_attempts)")
+    .all() as Array<Record<string, unknown>>;
+  const columns = db
+    .prepare("PRAGMA table_info(practice_attempts)")
+    .all() as Array<Record<string, unknown>>;
+  const hasMaterialId = columns.some((column) => String(column.name) === "material_id");
+  const segmentFk = foreignKeys.find((key) => String(key.from) === "segment_id");
+  const segmentNeedsMigration =
+    !segmentFk || String(segmentFk.on_delete).toUpperCase() !== "SET NULL";
+
+  if (!hasMaterialId || segmentNeedsMigration) {
+    recreatePracticeAttemptsTable(db, hasMaterialId);
+  }
+};
+
 const initDb = () => {
   const db = new DatabaseSync(dbPath);
   db.exec("PRAGMA foreign_keys = ON;");
@@ -61,6 +150,7 @@ const initDb = () => {
       start_ms INTEGER,
       end_ms INTEGER,
       tts_audio_path TEXT,
+      starred INTEGER NOT NULL DEFAULT 0,
       source TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
@@ -70,7 +160,8 @@ const initDb = () => {
 
     CREATE TABLE IF NOT EXISTS practice_attempts (
       id TEXT PRIMARY KEY,
-      segment_id TEXT NOT NULL REFERENCES sentence_segments(id) ON DELETE CASCADE,
+      material_id TEXT NOT NULL REFERENCES materials(id) ON DELETE CASCADE,
+      segment_id TEXT REFERENCES sentence_segments(id) ON DELETE SET NULL,
       attempt_audio_path TEXT NOT NULL,
       recognized_text TEXT NOT NULL DEFAULT '',
       pron_score REAL,
@@ -87,6 +178,8 @@ const initDb = () => {
 
     CREATE INDEX IF NOT EXISTS idx_practice_attempts_segment_created
       ON practice_attempts (segment_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_practice_attempts_material_created
+      ON practice_attempts (material_id, created_at DESC);
 
     CREATE TABLE IF NOT EXISTS weak_patterns (
       id TEXT PRIMARY KEY,
@@ -114,6 +207,10 @@ const initDb = () => {
       created_at TEXT NOT NULL
       );
   `);
+  if (tableExists(db, "practice_attempts")) {
+    ensurePracticeAttemptsSchema(db);
+  }
+  ensureColumnExists(db, "sentence_segments", "starred", "INTEGER NOT NULL DEFAULT 0");
   ensureColumnExists(db, "practice_attempts", "feedback_json_path", "TEXT");
   ensureColumnExists(db, "practice_attempts", "feedback_markdown_path", "TEXT");
   return db;
@@ -148,13 +245,15 @@ const rowToSegment = (row: Record<string, unknown>): SentenceSegment => ({
   startMs: row.start_ms === null ? null : Number(row.start_ms),
   endMs: row.end_ms === null ? null : Number(row.end_ms),
   ttsAudioPath: row.tts_audio_path ? String(row.tts_audio_path) : null,
+  starred: Boolean(row.starred),
   source: row.source as SentenceSegment["source"],
   createdAt: String(row.created_at),
 });
 
 const rowToAttempt = (row: Record<string, unknown>): PracticeAttempt => ({
   id: String(row.id),
-  segmentId: String(row.segment_id),
+  materialId: String(row.material_id),
+  segmentId: row.segment_id ? String(row.segment_id) : null,
   attemptAudioPath: String(row.attempt_audio_path),
   feedbackJsonPath: row.feedback_json_path ? String(row.feedback_json_path) : null,
   feedbackMarkdownPath: row.feedback_markdown_path ? String(row.feedback_markdown_path) : null,
@@ -277,6 +376,17 @@ export const updateMaterial = (
   return getMaterial(materialId)!;
 };
 
+export const deleteMaterial = (materialId: string) => {
+  const material = getMaterial(materialId);
+  if (!material) {
+    throw new Error("Material not found.");
+  }
+
+  getDb().prepare("DELETE FROM materials WHERE id = ?").run(materialId);
+
+  return material;
+};
+
 export const listSegmentsByMaterial = (materialId: string) => {
   const rows = getDb()
     .prepare(
@@ -300,29 +410,64 @@ export const replaceSegments = (
   const db = getDb();
   db.exec("BEGIN");
   try {
-    db.prepare("DELETE FROM sentence_segments WHERE material_id = ?").run(materialId);
-
-    const stmt = db.prepare(
+    const existing = listSegmentsByMaterial(materialId);
+    const existingById = new Map(existing.map((segment) => [segment.id, segment]));
+    const incomingIds = new Set(segments.map((segment) => segment.id).filter(Boolean));
+    const insertStmt = db.prepare(
       `
         INSERT INTO sentence_segments (
-          id, material_id, idx, text, normalized_text, start_ms, end_ms, tts_audio_path, source, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          id, material_id, idx, text, normalized_text, start_ms, end_ms, tts_audio_path, starred, source, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     );
+    const updateStmt = db.prepare(
+      `
+        UPDATE sentence_segments
+        SET idx = ?,
+            text = ?,
+            normalized_text = ?,
+            start_ms = ?,
+            end_ms = ?,
+            source = ?
+        WHERE id = ?
+      `,
+    );
+    const deleteStmt = db.prepare("DELETE FROM sentence_segments WHERE id = ?");
 
     for (const segment of segments) {
-      stmt.run(
+      const normalizedText = segment.text.trim().toLowerCase();
+      if (segment.id && existingById.has(segment.id)) {
+        updateStmt.run(
+          segment.index,
+          segment.text,
+          normalizedText,
+          segment.startMs,
+          segment.endMs,
+          segment.source,
+          segment.id,
+        );
+        continue;
+      }
+
+      insertStmt.run(
         segment.id ?? createId(),
         materialId,
         segment.index,
         segment.text,
-        segment.text.trim().toLowerCase(),
+        normalizedText,
         segment.startMs,
         segment.endMs,
         null,
+        segment.starred ? 1 : 0,
         segment.source,
         defaultCreatedAt,
       );
+    }
+
+    for (const segment of existing) {
+      if (!incomingIds.has(segment.id)) {
+        deleteStmt.run(segment.id);
+      }
     }
     db.exec("COMMIT");
   } catch (error) {
@@ -338,6 +483,19 @@ export const updateSegmentTtsPath = (segmentId: string, ttsAudioPath: string | n
     .run(ttsAudioPath, segmentId);
 };
 
+export const updateSegmentStarred = (segmentId: string, starred: boolean) => {
+  const segment = getSegment(segmentId);
+  if (!segment) {
+    throw new Error("Segment not found.");
+  }
+
+  getDb()
+    .prepare("UPDATE sentence_segments SET starred = ? WHERE id = ?")
+    .run(starred ? 1 : 0, segmentId);
+
+  return getSegment(segmentId)!;
+};
+
 export const getSegment = (segmentId: string) => {
   const row = getDb()
     .prepare("SELECT * FROM sentence_segments WHERE id = ?")
@@ -349,6 +507,7 @@ export const getSegment = (segmentId: string) => {
 export const createAttempt = (input: {
   id?: string;
   createdAt?: string;
+  materialId: string;
   segmentId: string;
   attemptAudioPath: string;
   feedbackJsonPath?: string | null;
@@ -369,14 +528,15 @@ export const createAttempt = (input: {
     .prepare(
       `
         INSERT INTO practice_attempts (
-          id, segment_id, attempt_audio_path, recognized_text, pron_score, accuracy_score,
+          id, material_id, segment_id, attempt_audio_path, recognized_text, pron_score, accuracy_score,
           fluency_score, completeness_score, word_results_json, provider_raw_json, analysis_json,
           feedback_json_path, feedback_markdown_path, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `,
     )
     .run(
       id,
+      input.materialId,
       input.segmentId,
       input.attemptAudioPath,
       input.recognizedText,
@@ -395,6 +555,57 @@ export const createAttempt = (input: {
   return getAttempt(id)!;
 };
 
+export const updateAttemptAnalysis = (
+  attemptId: string,
+  patch: Pick<PracticeAttempt, "analysisJson" | "feedbackJsonPath" | "feedbackMarkdownPath">,
+) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  getDb()
+    .prepare(
+      `
+        UPDATE practice_attempts
+        SET analysis_json = ?,
+            feedback_json_path = ?,
+            feedback_markdown_path = ?
+        WHERE id = ?
+      `,
+    )
+    .run(
+      jsonStringify(patch.analysisJson),
+      patch.feedbackJsonPath,
+      patch.feedbackMarkdownPath,
+      attemptId,
+    );
+
+  return getAttempt(attemptId)!;
+};
+
+export const updateAttemptSegment = (attemptId: string, segmentId: string | null) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  getDb().prepare("UPDATE practice_attempts SET segment_id = ? WHERE id = ?").run(segmentId, attemptId);
+
+  return getAttempt(attemptId)!;
+};
+
+export const deleteAttempt = (attemptId: string) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  getDb().prepare("DELETE FROM practice_attempts WHERE id = ?").run(attemptId);
+
+  return attempt;
+};
+
 export const getAttempt = (attemptId: string) => {
   const row = getDb()
     .prepare("SELECT * FROM practice_attempts WHERE id = ?")
@@ -409,8 +620,7 @@ export const listAttemptsForMaterial = (materialId: string) => {
       `
         SELECT pa.*
         FROM practice_attempts pa
-        INNER JOIN sentence_segments ss ON ss.id = pa.segment_id
-        WHERE ss.material_id = ?
+        WHERE pa.material_id = ?
         ORDER BY datetime(pa.created_at) DESC
       `,
     )

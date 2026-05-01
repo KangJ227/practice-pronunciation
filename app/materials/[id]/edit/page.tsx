@@ -45,6 +45,8 @@ export default async function MaterialEditPage({
         <SegmentEditor
           material={view.material}
           initialSegments={view.segments}
+          initialAttemptsBySegment={view.attemptsBySegment}
+          initialUnlinkedAttempts={view.unlinkedAttempts}
           sourceAudioUrl={storageUrl(view.material.sourceAudioPath)}
         />
       </main>

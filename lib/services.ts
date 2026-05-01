@@ -5,6 +5,9 @@ import {
   addWeakPatternEvidence,
   createAttempt,
   createMaterial,
+  deleteAttempt,
+  deleteMaterial,
+  getAttempt,
   getMaterial,
   getSegment,
   listAttemptsForMaterial,
@@ -13,7 +16,10 @@ import {
   listWeakPatternEvidenceForKey,
   listWeakPatterns,
   replaceSegments,
+  updateAttemptAnalysis,
+  updateAttemptSegment,
   updateMaterial,
+  updateSegmentStarred,
   updateSegmentTtsPath,
   upsertWeakPattern,
 } from "@/lib/db";
@@ -55,11 +61,18 @@ import {
   ensureMaterialAudioLimit,
   saveUploadedFile,
 } from "@/lib/audio";
-import { resolveStoragePath, storageUrl, writeBuffer } from "@/lib/storage";
+import { removeStorageFile, removeStoragePrefix, storageUrl, writeBuffer } from "@/lib/storage";
 import { createId, nowIso } from "@/lib/utils";
 
 const ttsErrorMessage =
   "Azure Speech is not configured, so reference TTS audio could not be generated yet.";
+
+const emptyAnalysis = (): KimiAnalysis => ({
+  summary: "",
+  nextDrill: "",
+  weakPatterns: [],
+  highlightTokens: [],
+});
 
 const normalizeSegments = (segments: EditableSegmentInput[]) =>
   segments
@@ -233,10 +246,15 @@ export const getMaterialEditorView = (materialId: string) => {
   if (!material) {
     throw new Error("Material not found.");
   }
+  const practice = getPracticeMaterialView(materialId);
 
   return {
     material,
     segments: listSegmentsByMaterial(materialId),
+    attemptsBySegment: Object.fromEntries(
+      practice.segments.map((segment) => [segment.id, segment.attempts]),
+    ),
+    unlinkedAttempts: practice.unlinkedAttempts,
   };
 };
 
@@ -248,7 +266,13 @@ export const getPracticeMaterialView = (materialId: string): PracticeMaterialVie
 
   const segments = listSegmentsByMaterial(materialId);
   const attemptsBySegment = new Map<string, PracticeAttempt[]>();
+  const unlinkedAttempts: PracticeAttempt[] = [];
   for (const attempt of listAttemptsForMaterial(materialId)) {
+    if (!attempt.segmentId) {
+      unlinkedAttempts.push(attempt);
+      continue;
+    }
+
     const current = attemptsBySegment.get(attempt.segmentId);
     if (current) {
       current.push(attempt);
@@ -270,6 +294,7 @@ export const getPracticeMaterialView = (materialId: string): PracticeMaterialVie
         highlights: computeSegmentHighlights(segment, weakPatterns),
       };
     }),
+    unlinkedAttempts,
     focusItems: buildFocusItems(weakPatterns),
   };
 };
@@ -282,6 +307,115 @@ export const recomputeHighlightsWorkflow = (materialId: string) => {
       view.segments.map((segment) => [segment.id, segment.highlights]),
     ),
     focusItems: view.focusItems,
+  };
+};
+
+export const deleteMaterialWorkflow = async (
+  materialId: string,
+  options: { onlyIfError?: boolean } = {},
+) => {
+  const material = getMaterial(materialId);
+  if (!material) {
+    throw new Error("Material not found.");
+  }
+  if (options.onlyIfError && material.status !== "error") {
+    throw new Error("Only ERROR sessions can be deleted from this action.");
+  }
+
+  const segments = listSegmentsByMaterial(materialId);
+  const attempts = listAttemptsForMaterial(materialId);
+  const storageKeys = [
+    material.sourceAudioPath,
+    ...segments.map((segment) => segment.ttsAudioPath),
+    ...attempts.flatMap((attempt) => [
+      attempt.attemptAudioPath,
+      attempt.feedbackJsonPath,
+      attempt.feedbackMarkdownPath,
+    ]),
+  ].filter((storageKey): storageKey is string => Boolean(storageKey));
+
+  deleteMaterial(materialId);
+
+  await Promise.all([
+    ...storageKeys.map((storageKey) => removeStorageFile(storageKey)),
+    removeStoragePrefix(path.posix.join("materials", materialId)),
+  ]);
+
+  return material;
+};
+
+export const deleteErrorMaterialsWorkflow = async () => {
+  const errorMaterials = listMaterials().filter((material) => material.status === "error");
+
+  for (const material of errorMaterials) {
+    await deleteMaterialWorkflow(material.id, { onlyIfError: true });
+  }
+
+  return {
+    deletedCount: errorMaterials.length,
+    deletedIds: errorMaterials.map((material) => material.id),
+  };
+};
+
+export const updateAttemptAssociationWorkflow = async (input: {
+  attemptId: string;
+  segmentId: string | null;
+}) => {
+  const attempt = getAttempt(input.attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  if (input.segmentId) {
+    const segment = getSegment(input.segmentId);
+    if (!segment || segment.materialId !== attempt.materialId) {
+      throw new Error("Target segment not found for this material.");
+    }
+  }
+
+  const updatedAttempt = updateAttemptSegment(input.attemptId, input.segmentId);
+
+  return {
+    attempt: updatedAttempt,
+    practice: getPracticeMaterialView(attempt.materialId),
+  };
+};
+
+export const deleteAttemptWorkflow = async (attemptId: string) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  const storageKeys = [
+    attempt.attemptAudioPath,
+    attempt.feedbackJsonPath,
+    attempt.feedbackMarkdownPath,
+  ].filter((storageKey): storageKey is string => Boolean(storageKey));
+
+  const deletedAttempt = deleteAttempt(attemptId);
+  await Promise.all(storageKeys.map((storageKey) => removeStorageFile(storageKey)));
+
+  return {
+    attempt: deletedAttempt,
+    practice: getPracticeMaterialView(deletedAttempt.materialId),
+  };
+};
+
+export const updateSegmentStarredWorkflow = async (input: {
+  segmentId: string;
+  starred: boolean;
+}) => {
+  const segment = getSegment(input.segmentId);
+  if (!segment) {
+    throw new Error("Segment not found.");
+  }
+
+  const updatedSegment = updateSegmentStarred(input.segmentId, input.starred);
+
+  return {
+    segment: updatedSegment,
+    practice: getPracticeMaterialView(updatedSegment.materialId),
   };
 };
 
@@ -315,30 +449,16 @@ export const submitAttemptWorkflow = async (input: {
   const wavPath = await convertToMonoWav(saved.fullPath, wavStorageKey);
 
   const pronunciation = await runPronunciationAssessment(segment.text, wavPath);
-  const history = listWeakPatterns();
-  const analysis = await analyzeAttemptWithKimi({
-    referenceText: segment.text,
-    recognizedText: pronunciation.recognizedText,
-    pronScore: pronunciation.pronScore,
-    accuracyScore: pronunciation.accuracyScore,
-    fluencyScore: pronunciation.fluencyScore,
-    completenessScore: pronunciation.completenessScore,
-    wordResults: pronunciation.words,
-    history,
-  });
 
   const attemptId = createId();
   const createdAt = nowIso();
-  const feedbackPaths = getAttemptFeedbackPaths({
-    id: attemptId,
-    segmentId: segment.id,
-  });
   const attemptDraft: PracticeAttempt = {
     id: attemptId,
+    materialId: material.id,
     segmentId: segment.id,
     attemptAudioPath: wavStorageKey,
-    feedbackJsonPath: feedbackPaths.feedbackJsonPath,
-    feedbackMarkdownPath: feedbackPaths.feedbackMarkdownPath,
+    feedbackJsonPath: null,
+    feedbackMarkdownPath: null,
     recognizedText: pronunciation.recognizedText,
     pronScore: pronunciation.pronScore,
     accuracyScore: pronunciation.accuracyScore,
@@ -346,19 +466,14 @@ export const submitAttemptWorkflow = async (input: {
     completenessScore: pronunciation.completenessScore,
     wordResultsJson: pronunciation.words,
     providerRawJson: pronunciation.raw,
-    analysisJson: analysis,
+    analysisJson: emptyAnalysis(),
     createdAt,
   };
-
-  await writeAttemptFeedbackArtifacts({
-    material,
-    segment,
-    attempt: attemptDraft,
-  });
 
   const attempt = createAttempt({
     id: attemptDraft.id,
     createdAt: attemptDraft.createdAt,
+    materialId: material.id,
     segmentId: segment.id,
     attemptAudioPath: wavStorageKey,
     feedbackJsonPath: attemptDraft.feedbackJsonPath,
@@ -370,18 +485,77 @@ export const submitAttemptWorkflow = async (input: {
     completenessScore: pronunciation.completenessScore,
     wordResultsJson: pronunciation.words,
     providerRawJson: pronunciation.raw,
-    analysisJson: analysis,
-  });
-
-  await rememberWeakPatterns({
-    segment,
-    attemptId: attempt.id,
-    words: pronunciation.words,
-    analysis,
+    analysisJson: attemptDraft.analysisJson,
   });
 
   return {
     attempt,
+    practice: getPracticeMaterialView(segment.materialId),
+  };
+};
+
+export const analyzeAttemptWorkflow = async (attemptId: string) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+  if (!attempt.segmentId) {
+    throw new Error("Please re-associate this recording with a sentence before generating AI feedback.");
+  }
+
+  const segment = getSegment(attempt.segmentId);
+  if (!segment) {
+    throw new Error("Segment not found.");
+  }
+
+  const material = getMaterial(segment.materialId);
+  if (!material) {
+    throw new Error("Parent material not found.");
+  }
+
+  const wasAlreadyAnalyzed = Boolean(attempt.feedbackJsonPath || attempt.feedbackMarkdownPath);
+  const analysis = await analyzeAttemptWithKimi({
+    referenceText: segment.text,
+    recognizedText: attempt.recognizedText,
+    pronScore: attempt.pronScore,
+    accuracyScore: attempt.accuracyScore,
+    fluencyScore: attempt.fluencyScore,
+    completenessScore: attempt.completenessScore,
+    wordResults: attempt.wordResultsJson,
+    history: listWeakPatterns(),
+  });
+
+  const feedbackPaths = getAttemptFeedbackPaths(attempt);
+  const analyzedAttempt: PracticeAttempt = {
+    ...attempt,
+    feedbackJsonPath: feedbackPaths.feedbackJsonPath,
+    feedbackMarkdownPath: feedbackPaths.feedbackMarkdownPath,
+    analysisJson: analysis,
+  };
+
+  await writeAttemptFeedbackArtifacts({
+    material,
+    segment,
+    attempt: analyzedAttempt,
+  });
+
+  const updatedAttempt = updateAttemptAnalysis(attempt.id, {
+    analysisJson: analysis,
+    feedbackJsonPath: feedbackPaths.feedbackJsonPath,
+    feedbackMarkdownPath: feedbackPaths.feedbackMarkdownPath,
+  });
+
+  if (!wasAlreadyAnalyzed) {
+    await rememberWeakPatterns({
+      segment,
+      attemptId: updatedAttempt.id,
+      words: updatedAttempt.wordResultsJson,
+      analysis,
+    });
+  }
+
+  return {
+    attempt: updatedAttempt,
     practice: getPracticeMaterialView(segment.materialId),
   };
 };

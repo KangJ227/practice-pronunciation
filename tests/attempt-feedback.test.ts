@@ -27,12 +27,14 @@ const segment: SentenceSegment = {
   startMs: null,
   endMs: null,
   ttsAudioPath: null,
+  starred: false,
   source: "text",
   createdAt: "2026-04-22T09:01:00.000Z",
 };
 
 const attempt: PracticeAttempt = {
   id: "att-1",
+  materialId: "mat-1",
   segmentId: "seg-1",
   attemptAudioPath: "attempts/seg-1/normalized/att-1.wav",
   feedbackJsonPath: "attempts/seg-1/feedback/att-1-feedback.json",
