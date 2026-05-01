@@ -101,36 +101,38 @@ where id = (
 GitHub Actions contains two workflows:
 
 - `.github/workflows/ci.yml` runs on pull requests and manual dispatch.
-- `.github/workflows/deploy.yml` runs on pushes to `main` and manual dispatch. It verifies the app, pushes Supabase migrations, then deploys to Vercel production.
+- `.github/workflows/deploy.yml` runs on pushes to `master` and manual dispatch. It verifies the app, pushes Supabase migrations, then deploys to Vercel production.
 
-Add these GitHub repository secrets:
+GitHub CI does not receive application runtime secrets. Keep runtime configuration in
+Vercel Production Environment Variables so `vercel pull --environment=production`
+is the single source for Vercel builds:
 
 ```bash
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY
 APP_SESSION_SECRET
+SUPABASE_STORAGE_BUCKET=practice-media
+AZURE_SPEECH_KEY
+AZURE_SPEECH_REGION
+AZURE_SPEECH_VOICE=fr-FR-DeniseNeural
+KIMI_API_KEY
+KIMI_BASE_URL=https://api.moonshot.cn/v1
+KIMI_MODEL=kimi-k2.6
+DEFAULT_LOCALE=fr-FR
+MAX_AUDIO_MINUTES=10
+MAX_ATTEMPT_SECONDS=60
+```
+
+GitHub Production secrets are only for deployment infrastructure:
+
+```bash
 SUPABASE_ACCESS_TOKEN
 SUPABASE_PROJECT_ID
 SUPABASE_DB_PASSWORD
 VERCEL_TOKEN
 VERCEL_ORG_ID
 VERCEL_PROJECT_ID
-AZURE_SPEECH_KEY
-AZURE_SPEECH_REGION
-KIMI_API_KEY
-```
-
-Recommended GitHub repository variables:
-
-```bash
-SUPABASE_STORAGE_BUCKET=practice-media
-AZURE_SPEECH_VOICE=fr-FR-DeniseNeural
-KIMI_BASE_URL=https://api.moonshot.cn/v1
-KIMI_MODEL=kimi-k2.5
-DEFAULT_LOCALE=fr-FR
-MAX_AUDIO_MINUTES=10
-MAX_ATTEMPT_SECONDS=20
 ```
 
 The first production deploy applies `supabase/migrations/20260501000000_initial_private_practice_app.sql`. Future database changes should be added as new files under `supabase/migrations/`.
