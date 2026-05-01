@@ -11,6 +11,7 @@ const segment: SentenceSegment = {
   startMs: null,
   endMs: null,
   ttsAudioPath: null,
+  starred: false,
   source: "text",
   createdAt: new Date().toISOString(),
 };

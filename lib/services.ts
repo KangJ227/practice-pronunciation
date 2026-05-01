@@ -5,6 +5,7 @@ import {
   addWeakPatternEvidence,
   createAttempt,
   createMaterial,
+  deleteAttempt,
   deleteMaterial,
   getAttempt,
   getMaterial,
@@ -16,7 +17,9 @@ import {
   listWeakPatterns,
   replaceSegments,
   updateAttemptAnalysis,
+  updateAttemptSegment,
   updateMaterial,
+  updateSegmentStarred,
   updateSegmentTtsPath,
   upsertWeakPattern,
 } from "@/lib/db";
@@ -243,10 +246,15 @@ export const getMaterialEditorView = (materialId: string) => {
   if (!material) {
     throw new Error("Material not found.");
   }
+  const practice = getPracticeMaterialView(materialId);
 
   return {
     material,
     segments: listSegmentsByMaterial(materialId),
+    attemptsBySegment: Object.fromEntries(
+      practice.segments.map((segment) => [segment.id, segment.attempts]),
+    ),
+    unlinkedAttempts: practice.unlinkedAttempts,
   };
 };
 
@@ -258,7 +266,13 @@ export const getPracticeMaterialView = (materialId: string): PracticeMaterialVie
 
   const segments = listSegmentsByMaterial(materialId);
   const attemptsBySegment = new Map<string, PracticeAttempt[]>();
+  const unlinkedAttempts: PracticeAttempt[] = [];
   for (const attempt of listAttemptsForMaterial(materialId)) {
+    if (!attempt.segmentId) {
+      unlinkedAttempts.push(attempt);
+      continue;
+    }
+
     const current = attemptsBySegment.get(attempt.segmentId);
     if (current) {
       current.push(attempt);
@@ -280,6 +294,7 @@ export const getPracticeMaterialView = (materialId: string): PracticeMaterialVie
         highlights: computeSegmentHighlights(segment, weakPatterns),
       };
     }),
+    unlinkedAttempts,
     focusItems: buildFocusItems(weakPatterns),
   };
 };
@@ -342,6 +357,68 @@ export const deleteErrorMaterialsWorkflow = async () => {
   };
 };
 
+export const updateAttemptAssociationWorkflow = async (input: {
+  attemptId: string;
+  segmentId: string | null;
+}) => {
+  const attempt = getAttempt(input.attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  if (input.segmentId) {
+    const segment = getSegment(input.segmentId);
+    if (!segment || segment.materialId !== attempt.materialId) {
+      throw new Error("Target segment not found for this material.");
+    }
+  }
+
+  const updatedAttempt = updateAttemptSegment(input.attemptId, input.segmentId);
+
+  return {
+    attempt: updatedAttempt,
+    practice: getPracticeMaterialView(attempt.materialId),
+  };
+};
+
+export const deleteAttemptWorkflow = async (attemptId: string) => {
+  const attempt = getAttempt(attemptId);
+  if (!attempt) {
+    throw new Error("Attempt not found.");
+  }
+
+  const storageKeys = [
+    attempt.attemptAudioPath,
+    attempt.feedbackJsonPath,
+    attempt.feedbackMarkdownPath,
+  ].filter((storageKey): storageKey is string => Boolean(storageKey));
+
+  const deletedAttempt = deleteAttempt(attemptId);
+  await Promise.all(storageKeys.map((storageKey) => removeStorageFile(storageKey)));
+
+  return {
+    attempt: deletedAttempt,
+    practice: getPracticeMaterialView(deletedAttempt.materialId),
+  };
+};
+
+export const updateSegmentStarredWorkflow = async (input: {
+  segmentId: string;
+  starred: boolean;
+}) => {
+  const segment = getSegment(input.segmentId);
+  if (!segment) {
+    throw new Error("Segment not found.");
+  }
+
+  const updatedSegment = updateSegmentStarred(input.segmentId, input.starred);
+
+  return {
+    segment: updatedSegment,
+    practice: getPracticeMaterialView(updatedSegment.materialId),
+  };
+};
+
 export const submitAttemptWorkflow = async (input: {
   segmentId: string;
   file: File;
@@ -377,6 +454,7 @@ export const submitAttemptWorkflow = async (input: {
   const createdAt = nowIso();
   const attemptDraft: PracticeAttempt = {
     id: attemptId,
+    materialId: material.id,
     segmentId: segment.id,
     attemptAudioPath: wavStorageKey,
     feedbackJsonPath: null,
@@ -395,6 +473,7 @@ export const submitAttemptWorkflow = async (input: {
   const attempt = createAttempt({
     id: attemptDraft.id,
     createdAt: attemptDraft.createdAt,
+    materialId: material.id,
     segmentId: segment.id,
     attemptAudioPath: wavStorageKey,
     feedbackJsonPath: attemptDraft.feedbackJsonPath,
@@ -419,6 +498,9 @@ export const analyzeAttemptWorkflow = async (attemptId: string) => {
   const attempt = getAttempt(attemptId);
   if (!attempt) {
     throw new Error("Attempt not found.");
+  }
+  if (!attempt.segmentId) {
+    throw new Error("Please re-associate this recording with a sentence before generating AI feedback.");
   }
 
   const segment = getSegment(attempt.segmentId);

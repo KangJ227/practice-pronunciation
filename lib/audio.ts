@@ -81,6 +81,27 @@ export const convertToMonoWav = async (inputPath: string, outputStorageKey: stri
   return outputPath;
 };
 
+export const convertToPlaybackMp3 = async (inputPath: string, outputStorageKey: string) => {
+  const outputPath = await resolveStoragePath(outputStorageKey);
+  await fs.mkdir(path.dirname(outputPath), { recursive: true });
+
+  await execFileAsync(ffmpegPath, [
+    "-y",
+    "-i",
+    inputPath,
+    "-vn",
+    "-codec:a",
+    "libmp3lame",
+    "-b:a",
+    "128k",
+    "-f",
+    "mp3",
+    outputPath,
+  ]);
+
+  return outputPath;
+};
+
 export const ensureAttemptAudioLimit = async (fullPath: string) =>
   assertDurationWithinLimit(
     fullPath,

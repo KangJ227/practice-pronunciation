@@ -31,6 +31,7 @@ export type SentenceSegment = {
   startMs: number | null;
   endMs: number | null;
   ttsAudioPath: string | null;
+  starred: boolean;
   source: SegmentSource;
   createdAt: string;
 };
@@ -64,7 +65,8 @@ export type KimiAnalysis = {
 
 export type PracticeAttempt = {
   id: string;
-  segmentId: string;
+  materialId: string;
+  segmentId: string | null;
   attemptAudioPath: string;
   feedbackJsonPath: string | null;
   feedbackMarkdownPath: string | null;
@@ -97,6 +99,7 @@ export type EditableSegmentInput = {
   text: string;
   startMs: number | null;
   endMs: number | null;
+  starred?: boolean;
   source: SegmentSource;
 };
 
@@ -116,6 +119,7 @@ export type PracticeSegmentView = SentenceSegment & {
 export type PracticeMaterialView = {
   material: StudyMaterial;
   segments: PracticeSegmentView[];
+  unlinkedAttempts: PracticeAttempt[];
   focusItems: Array<{
     patternType: WeakPatternType;
     displayText: string;

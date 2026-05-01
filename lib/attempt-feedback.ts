@@ -14,13 +14,13 @@ export const getAttemptFeedbackPaths = (
 ) => ({
   feedbackJsonPath: path.posix.join(
     "attempts",
-    attempt.segmentId,
+    attempt.segmentId ?? "unlinked",
     "feedback",
     `${attempt.id}-feedback.json`,
   ),
   feedbackMarkdownPath: path.posix.join(
     "attempts",
-    attempt.segmentId,
+    attempt.segmentId ?? "unlinked",
     "feedback",
     `${attempt.id}-feedback.md`,
   ),
