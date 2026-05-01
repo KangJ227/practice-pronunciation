@@ -1,29 +1,20 @@
 import { redirect } from "next/navigation";
-import type { User } from "@supabase/supabase-js";
-import { appConfig } from "@/lib/config";
-import { createClient } from "@/lib/supabase/server";
+import { cookies } from "next/headers";
+import { getAppUserById } from "@/lib/password-auth";
+import {
+  sessionCookieName,
+  verifySessionToken,
+  type AppSessionUser,
+} from "@/lib/session";
 
-export const isAllowedUser = (user: Pick<User, "email"> | null) => {
-  if (!user?.email || !appConfig.allowedLoginEmail) {
-    return false;
-  }
-
-  return user.email.toLowerCase() === appConfig.allowedLoginEmail;
-};
-
-export const getCurrentUser = async () => {
-  if (!appConfig.supabaseUrl || !appConfig.supabasePublishableKey) {
+export const getCurrentUser = async (): Promise<AppSessionUser | null> => {
+  const cookieStore = await cookies();
+  const sessionUser = await verifySessionToken(cookieStore.get(sessionCookieName)?.value);
+  if (!sessionUser) {
     return null;
   }
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.getUser();
-
-  if (error || !data.user || !isAllowedUser(data.user)) {
-    return null;
-  }
-
-  return data.user;
+  return getAppUserById(sessionUser.id);
 };
 
 export const requireUser = async () => {

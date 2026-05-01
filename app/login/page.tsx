@@ -1,5 +1,4 @@
 import { redirect } from "next/navigation";
-import { appConfig } from "@/lib/config";
 import { getCurrentUser } from "@/lib/auth";
 import { LoginForm } from "@/app/login/login-form";
 
@@ -25,11 +24,10 @@ export default async function LoginPage({
         </p>
         <h1 className="mt-3 font-display text-4xl text-ink">Atelier de Prononciation</h1>
         <p className="mt-3 text-sm leading-6 text-ink/70">
-          Sign in with the allowed email to open your pronunciation workspace.
+          Sign in with your practice account to open your pronunciation workspace.
         </p>
         <div className="mt-6">
           <LoginForm
-            allowedEmail={appConfig.allowedLoginEmail}
             denied={params.denied === "1"}
             next={params.next || "/"}
           />
