@@ -22,6 +22,12 @@ export type StudyMaterial = {
   createdAt: string;
 };
 
+export type UserSettings = {
+  userId: string;
+  ttsVoice: string;
+  updatedAt: string;
+};
+
 export type SentenceSegment = {
   id: string;
   materialId: string;

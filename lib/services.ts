@@ -11,6 +11,7 @@ import {
   getAttempt,
   getMaterial,
   getSegment,
+  getUserSettings,
   listAttemptsForMaterial,
   listMaterials,
   listSegmentsByMaterial,
@@ -22,6 +23,7 @@ import {
   updateMaterial,
   updateSegmentStarred,
   updateSegmentTtsPath,
+  updateUserSettings,
   upsertWeakPattern,
 } from "@/lib/db";
 import {
@@ -123,6 +125,25 @@ export const getDashboardMaterials = async () =>
     practiceHref: `/materials/${material.id}/practice`,
     editHref: `/materials/${material.id}/edit`,
   }));
+
+export const getSettingsView = async () => getUserSettings();
+
+export const updateSettingsWorkflow = async (input: { ttsVoice: string }) => {
+  const ttsVoice = input.ttsVoice.trim();
+  if (!ttsVoice) {
+    throw new Error("Please enter an Azure TTS voice name.");
+  }
+
+  if (ttsVoice.length > 120) {
+    throw new Error("TTS voice name is too long.");
+  }
+
+  if (!/^[A-Za-z]{2,3}-[A-Za-z0-9-]+$/.test(ttsVoice)) {
+    throw new Error("Use an Azure voice name like fr-FR-DeniseNeural.");
+  }
+
+  return updateUserSettings({ ttsVoice });
+};
 
 export const createTextMaterialWorkflow = async (input: {
   title: string;
@@ -356,6 +377,18 @@ export const updateMaterialSegmentsWorkflow = async (
     material: (await getMaterial(materialId))!,
     segments: await listSegmentsByMaterial(materialId),
   };
+};
+
+export const regenerateMaterialTtsWorkflow = async (materialId: string) => {
+  const material = await getMaterial(materialId);
+  if (!material) {
+    throw new Error("Material not found.");
+  }
+
+  const segments = await listSegmentsByMaterial(materialId);
+  await generateReferenceAudio(material, segments, { force: true });
+
+  return getPracticeMaterialView(materialId);
 };
 
 export const getMaterialEditorView = async (materialId: string) => {
@@ -891,6 +924,7 @@ const rememberWeakPatterns = async (input: {
 const generateReferenceAudio = async (
   material: StudyMaterial,
   segments: SentenceSegment[],
+  options: { force?: boolean } = {},
 ) => {
   if (!isAzureSpeechConfigured()) {
     await updateMaterial(material.id, {
@@ -899,13 +933,23 @@ const generateReferenceAudio = async (
     return;
   }
 
+  const settings = await getUserSettings();
+
   for (const segment of segments) {
-    if (segment.ttsAudioPath) {
+    if (segment.ttsAudioPath && !options.force) {
       continue;
     }
 
     try {
-      const audioBuffer = await synthesizeSentenceAudio(segment.text, material.locale);
+      if (options.force && segment.ttsAudioPath) {
+        await removeStorageFile(segment.ttsAudioPath);
+      }
+
+      const audioBuffer = await synthesizeSentenceAudio(
+        segment.text,
+        material.locale,
+        settings.ttsVoice,
+      );
       const storageKey = await writeBuffer(
         `materials/${material.id}/tts`,
         `segment-${segment.index + 1}.mp3`,

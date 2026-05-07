@@ -47,6 +47,13 @@ create table if not exists public.materials (
   created_at timestamptz not null
 );
 
+create table if not exists public.user_settings (
+  user_id uuid primary key references public.app_users(id) on delete cascade,
+  tts_voice text not null default 'fr-FR-DeniseNeural',
+  updated_at timestamptz not null default now(),
+  constraint user_settings_tts_voice_present check (length(trim(tts_voice)) > 0)
+);
+
 create table if not exists public.sentence_segments (
   id text primary key,
   user_id uuid not null references public.app_users(id) on delete cascade,
@@ -120,6 +127,7 @@ create index if not exists idx_practice_attempts_material_created
   on public.practice_attempts (user_id, material_id, created_at desc);
 
 alter table public.app_users enable row level security;
+alter table public.user_settings enable row level security;
 alter table public.materials enable row level security;
 alter table public.sentence_segments enable row level security;
 alter table public.practice_attempts enable row level security;
@@ -127,6 +135,13 @@ alter table public.weak_patterns enable row level security;
 alter table public.weak_pattern_evidence enable row level security;
 
 revoke all on table public.app_users from anon, authenticated;
+
+drop policy if exists "user settings are private" on public.user_settings;
+create policy "user settings are private"
+  on public.user_settings
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
 drop policy if exists "materials are private" on public.materials;
 create policy "materials are private"

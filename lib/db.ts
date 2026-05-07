@@ -3,8 +3,10 @@ import type {
   PracticeAttempt,
   SentenceSegment,
   StudyMaterial,
+  UserSettings,
   WeakPattern,
 } from "@/lib/types";
+import { appConfig } from "@/lib/config";
 import { requireUser } from "@/lib/auth";
 import { getSupabaseAdmin } from "@/lib/supabase/admin";
 import { createId, jsonParse, jsonStringify, nowIso } from "@/lib/utils";
@@ -85,6 +87,12 @@ const rowToWeakPattern = (row: Row): WeakPattern => ({
   lastSeenAt: String(row.last_seen_at),
   lastSegmentText: String(row.last_segment_text),
   notesJson: jsonParse(String(row.notes_json ?? "{}"), {}),
+});
+
+const rowToSettings = (row: Row): UserSettings => ({
+  userId: String(row.user_id),
+  ttsVoice: String(row.tts_voice ?? appConfig.speechVoice),
+  updatedAt: String(row.updated_at),
 });
 
 export const listMaterials = async () => {
@@ -205,6 +213,50 @@ export const deleteMaterial = async (materialId: string) => {
   }
 
   return material;
+};
+
+export const getUserSettings = async () => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("user_settings")
+    .select("*")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    fail("Failed to load settings", error);
+  }
+
+  return data
+    ? rowToSettings(data)
+    : {
+        userId,
+        ttsVoice: appConfig.speechVoice,
+        updatedAt: nowIso(),
+      };
+};
+
+export const updateUserSettings = async (input: { ttsVoice: string }) => {
+  const userId = await currentUserId();
+  const now = nowIso();
+  const { data, error } = await admin()
+    .from("user_settings")
+    .upsert(
+      {
+        user_id: userId,
+        tts_voice: input.ttsVoice,
+        updated_at: now,
+      },
+      { onConflict: "user_id" },
+    )
+    .select("*")
+    .single();
+
+  if (error) {
+    fail("Failed to save settings", error);
+  }
+
+  return rowToSettings(data);
 };
 
 export const listSegmentsByMaterial = async (materialId: string) => {
