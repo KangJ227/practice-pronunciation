@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="Atelier de Prononciation">
+  <defs>
+    <linearGradient id="bg" x1="12" y1="10" x2="54" y2="56" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F172A"/>
+      <stop offset="1" stop-color="#1E293B"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="16" y1="18" x2="48" y2="46" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F97316"/>
+      <stop offset="1" stop-color="#FB7185"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="16" fill="url(#bg)"/>
+  <path d="M18 24C18 19.582 21.582 16 26 16H34C39.523 16 44 20.477 44 26C44 31.523 39.523 36 34 36H27.5L20 44V36C18.895 36 18 35.105 18 34V24Z" fill="url(#accent)"/>
+  <path d="M24 24.5C24 23.672 24.672 23 25.5 23H34C37.037 23 39.5 25.463 39.5 28.5C39.5 31.537 37.037 34 34 34H29.2L24 39.2V24.5Z" fill="#FFF7ED" opacity="0.95"/>
+  <circle cx="31" cy="28.5" r="1.6" fill="#0F172A"/>
+  <circle cx="35.5" cy="28.5" r="1.6" fill="#0F172A"/>
+  <path d="M29 38.5C31.2 40.2 33.8 40.2 36 38.5" stroke="#FFF7ED" stroke-width="2.4" stroke-linecap="round"/>
+</svg>
