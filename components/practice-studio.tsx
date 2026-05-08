@@ -23,6 +23,11 @@ import {
 const mediaUrl = (storageKey: string | null | undefined) =>
   storageKey ? `/api/media/${storageKey}` : null;
 
+const mediaDownloadUrl = (storageKey: string | null | undefined) => {
+  const url = mediaUrl(storageKey);
+  return url ? `${url}?download=1` : null;
+};
+
 type LocalAttemptPreview = {
   segmentId: string;
   url: string;
@@ -56,6 +61,8 @@ export function PracticeStudio({
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<Record<string, string>>({});
   const sourceAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsUrlCacheRef = useRef(new Map<string, string>());
+  const pendingTtsUrlCacheRef = useRef(new Map<string, Promise<string>>());
   const loopClipRef = useRef(loopClip);
   const ttsPlaybackTokenRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -88,6 +95,48 @@ export function PracticeStudio({
     audio.pause();
     audio.loop = false;
     audio.onended = null;
+  };
+
+  const clearTtsUrlCache = () => {
+    for (const url of ttsUrlCacheRef.current.values()) {
+      URL.revokeObjectURL(url);
+    }
+
+    ttsUrlCacheRef.current.clear();
+    pendingTtsUrlCacheRef.current.clear();
+  };
+
+  const getCachedTtsUrl = async (storageKey: string) => {
+    const cachedUrl = ttsUrlCacheRef.current.get(storageKey);
+    if (cachedUrl) {
+      return cachedUrl;
+    }
+
+    const pendingUrl = pendingTtsUrlCacheRef.current.get(storageKey);
+    if (pendingUrl) {
+      return pendingUrl;
+    }
+
+    const request = (async () => {
+      const url = mediaDownloadUrl(storageKey);
+      if (!url) {
+        throw new Error("Reference TTS is not available for this sentence yet.");
+      }
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error("Reference TTS playback failed.");
+      }
+
+      const objectUrl = URL.createObjectURL(await response.blob());
+      ttsUrlCacheRef.current.set(storageKey, objectUrl);
+      return objectUrl;
+    })().finally(() => {
+      pendingTtsUrlCacheRef.current.delete(storageKey);
+    });
+
+    pendingTtsUrlCacheRef.current.set(storageKey, request);
+    return request;
   };
 
   const pauseSourcePlayback = () => {
@@ -141,6 +190,7 @@ export function PracticeStudio({
       sourceAudioRef.current?.pause();
       ttsAudioRef.current?.pause();
       ttsPlaybackTokenRef.current += 1;
+      clearTtsUrlCache();
       recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -222,7 +272,7 @@ export function PracticeStudio({
   };
 
   const playTts = async () => {
-    if (!ttsUrl) {
+    if (!segment?.ttsAudioPath || !ttsUrl) {
       setMessage("Reference TTS is not available for this sentence yet.");
       return;
     }
@@ -233,12 +283,16 @@ export function PracticeStudio({
     }
 
     pauseSourcePlayback();
-    ttsPlaybackTokenRef.current += 1;
+    const token = ttsPlaybackTokenRef.current + 1;
+    ttsPlaybackTokenRef.current = token;
     audio.pause();
     audio.onended = null;
     audio.loop = loopClipRef.current;
     try {
-      audio.src = ttsUrl;
+      audio.src = await getCachedTtsUrl(segment.ttsAudioPath);
+      if (ttsPlaybackTokenRef.current !== token) {
+        return;
+      }
       await audio.play();
       setMessage(null);
     } catch (error) {
@@ -274,8 +328,7 @@ export function PracticeStudio({
       }
 
       const target = playableSegments[index];
-      const url = mediaUrl(target.ttsAudioPath);
-      if (!url) {
+      if (!target.ttsAudioPath) {
         return;
       }
 
@@ -297,7 +350,10 @@ export function PracticeStudio({
       };
 
       try {
-        audio.src = url;
+        audio.src = await getCachedTtsUrl(target.ttsAudioPath);
+        if (ttsPlaybackTokenRef.current !== token) {
+          return;
+        }
         await audio.play();
         setSelectedSegmentId(target.id);
         setMessage(`Playing TTS ${index + 1}/${playableSegments.length}.`);
@@ -317,6 +373,7 @@ export function PracticeStudio({
     try {
       cancelTtsPlayback();
       pauseSourcePlayback();
+      clearTtsUrlCache();
       const response = await fetch(`/api/materials/${practice.material.id}/tts/regenerate`, {
         method: "POST",
       });
