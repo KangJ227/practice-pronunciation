@@ -54,6 +54,7 @@ const rowToSegment = (row: Row): SentenceSegment => ({
   endMs: row.end_ms === null ? null : Number(row.end_ms),
   ttsAudioPath: row.tts_audio_path ? String(row.tts_audio_path) : null,
   starred: Boolean(row.starred),
+  isRead: Boolean(row.is_read),
   source: row.source as SentenceSegment["source"],
   createdAt: String(row.created_at),
 });
@@ -302,6 +303,7 @@ export const replaceSegments = async (
       end_ms: input.endMs,
       tts_audio_path: existingSegment?.ttsAudioPath ?? null,
       starred: input.starred ?? existingSegment?.starred ?? false,
+      is_read: input.isRead ?? existingSegment?.isRead ?? false,
       source: input.source,
       created_at: existingSegment?.createdAt ?? now,
     };
@@ -363,6 +365,23 @@ export const updateSegmentStarred = async (segmentId: string, starred: boolean) 
 
   if (error) {
     fail("Failed to update segment star", error);
+  }
+
+  return rowToSegment(data);
+};
+
+export const updateSegmentRead = async (segmentId: string, isRead: boolean) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("sentence_segments")
+    .update({ is_read: isRead })
+    .eq("user_id", userId)
+    .eq("id", segmentId)
+    .select("*")
+    .single();
+
+  if (error) {
+    fail("Failed to update sentence read status", error);
   }
 
   return rowToSegment(data);

@@ -28,6 +28,7 @@ const segment: SentenceSegment = {
   endMs: null,
   ttsAudioPath: null,
   starred: false,
+  isRead: false,
   source: "text",
   createdAt: "2026-04-22T09:01:00.000Z",
 };

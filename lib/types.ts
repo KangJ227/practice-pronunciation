@@ -38,6 +38,7 @@ export type SentenceSegment = {
   endMs: number | null;
   ttsAudioPath: string | null;
   starred: boolean;
+  isRead: boolean;
   source: SegmentSource;
   createdAt: string;
 };
@@ -106,6 +107,7 @@ export type EditableSegmentInput = {
   startMs: number | null;
   endMs: number | null;
   starred?: boolean;
+  isRead?: boolean;
   source: SegmentSource;
 };
 

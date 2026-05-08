@@ -52,6 +52,7 @@ create table if not exists public.sentence_segments (
   end_ms integer,
   tts_audio_path text,
   starred boolean not null default false,
+  is_read boolean not null default false,
   source text not null check (source in ('text', 'transcription', 'manual')),
   created_at timestamptz not null
 );

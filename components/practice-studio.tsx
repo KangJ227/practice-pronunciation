@@ -38,6 +38,14 @@ type LocalAttemptPreview = {
   error: string | null;
 };
 
+type PlaybackType = "source" | "tts";
+
+const hasSourceClip = (segment: PracticeSegmentView) =>
+  segment.startMs !== null && segment.endMs !== null;
+
+const getFirstUnreadSegmentId = (segments: PracticeSegmentView[]) =>
+  segments.find((item) => !item.isRead)?.id ?? segments[0]?.id ?? null;
+
 export function PracticeStudio({
   initialPractice,
 }: {
@@ -46,7 +54,7 @@ export function PracticeStudio({
   const router = useRouter();
   const [practice, setPractice] = useState(initialPractice);
   const [selectedSegmentId, setSelectedSegmentId] = useState<string | null>(
-    initialPractice.segments[0]?.id ?? null,
+    getFirstUnreadSegmentId(initialPractice.segments),
   );
   const [pending, setPending] = useState(false);
   const [aiPendingId, setAiPendingId] = useState<string | null>(null);
@@ -57,6 +65,7 @@ export function PracticeStudio({
   const [message, setMessage] = useState<string | null>(practice.material.statusDetail);
   const [loopClip, setLoopClip] = useState(false);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
+  const [playbackType, setPlaybackType] = useState<PlaybackType>("tts");
   const [localAttemptPreview, setLocalAttemptPreview] = useState<LocalAttemptPreview | null>(null);
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<Record<string, string>>({});
   const sourceAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -64,6 +73,7 @@ export function PracticeStudio({
   const ttsUrlCacheRef = useRef(new Map<string, string>());
   const pendingTtsUrlCacheRef = useRef(new Map<string, Promise<string>>());
   const loopClipRef = useRef(loopClip);
+  const sourcePlaybackTokenRef = useRef(0);
   const ttsPlaybackTokenRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
@@ -84,6 +94,15 @@ export function PracticeStudio({
   const currentAttempt = segment
     ? getCurrentAttempt(segment, selectedAttemptIds[segment.id] ?? null)
     : null;
+  const sourceTypeAvailable =
+    Boolean(practice.material.sourceAudioPath) && queueSegments.some(hasSourceClip);
+  const ttsTypeAvailable = queueSegments.some((item) => item.ttsAudioPath);
+  const canPlaySelectedAudio =
+    playbackType === "source"
+      ? Boolean(segment && sourceTypeAvailable && hasSourceClip(segment))
+      : Boolean(segment?.ttsAudioPath);
+  const canPlayAllSelectedAudio =
+    playbackType === "source" ? sourceTypeAvailable : ttsTypeAvailable;
 
   const cancelTtsPlayback = () => {
     ttsPlaybackTokenRef.current += 1;
@@ -140,6 +159,7 @@ export function PracticeStudio({
   };
 
   const pauseSourcePlayback = () => {
+    sourcePlaybackTokenRef.current += 1;
     const audio = sourceAudioRef.current;
     if (!audio) {
       return;
@@ -155,9 +175,74 @@ export function PracticeStudio({
     setSelectedSegmentId(segmentId);
   };
 
+  const markSegmentRead = async (targetSegment: PracticeSegmentView) => {
+    if (targetSegment.isRead) {
+      return;
+    }
+
+    setPractice((current) => ({
+      ...current,
+      segments: current.segments.map((item) =>
+        item.id === targetSegment.id ? { ...item, isRead: true } : item,
+      ),
+    }));
+
+    try {
+      const response = await fetch(`/api/segments/${targetSegment.id}/read`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ isRead: true }),
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        practice?: PracticeMaterialView;
+      };
+
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to mark sentence as read.");
+      }
+
+      if (payload.practice) {
+        setPractice(payload.practice);
+      }
+    } catch (error) {
+      setPractice((current) => ({
+        ...current,
+        segments: current.segments.map((item) =>
+          item.id === targetSegment.id ? { ...item, isRead: false } : item,
+        ),
+      }));
+      setMessage(error instanceof Error ? error.message : "Failed to mark sentence as read.");
+    }
+  };
+
+  const goToPreviousSegment = () => {
+    selectSegment(queueSegments[Math.max(0, selectedIndex - 1)]?.id ?? segment?.id ?? null);
+  };
+
+  const goToNextSegment = () => {
+    if (!segment) {
+      return;
+    }
+
+    void markSegmentRead(segment);
+    selectSegment(
+      queueSegments[Math.min(queueSegments.length - 1, selectedIndex + 1)]?.id ??
+        segment.id,
+    );
+  };
+
   useEffect(() => {
     setPractice(initialPractice);
   }, [initialPractice]);
+
+  useEffect(() => {
+    if (!sourceTypeAvailable && playbackType === "source") {
+      setPlaybackType("tts");
+    }
+  }, [playbackType, sourceTypeAvailable]);
 
   useEffect(() => {
     loopClipRef.current = loopClip;
@@ -173,7 +258,7 @@ export function PracticeStudio({
         return current;
       }
 
-      return queueSegments[0]?.id ?? null;
+      return getFirstUnreadSegmentId(queueSegments);
     });
   }, [queueSegments]);
 
@@ -237,9 +322,14 @@ export function PracticeStudio({
       return;
     }
 
+    const token = sourcePlaybackTokenRef.current + 1;
+    sourcePlaybackTokenRef.current = token;
     audio.pause();
     try {
       await loadAudioMetadata(audio, sourceAudioUrl);
+      if (sourcePlaybackTokenRef.current !== token) {
+        return;
+      }
       audio.currentTime = segment.startMs / 1000;
     } catch (error) {
       setMessage(
@@ -252,6 +342,10 @@ export function PracticeStudio({
 
     const stopAt = segment.endMs / 1000;
     audio.ontimeupdate = () => {
+      if (sourcePlaybackTokenRef.current !== token) {
+        return;
+      }
+
       if (audio.currentTime >= stopAt) {
         if (loopClipRef.current) {
           audio.currentTime = segment.startMs! / 1000;
@@ -269,6 +363,90 @@ export function PracticeStudio({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
     }
+  };
+
+  const playAllSource = async () => {
+    if (!sourceAudioUrl) {
+      setMessage("Source audio is not available for this material.");
+      return;
+    }
+
+    const playableSegments = queueSegments.filter(hasSourceClip);
+    if (playableSegments.length === 0) {
+      setMessage("Source audio clips are not available for this practice queue yet.");
+      return;
+    }
+
+    cancelTtsPlayback();
+    const audio = sourceAudioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    const token = sourcePlaybackTokenRef.current + 1;
+    sourcePlaybackTokenRef.current = token;
+
+    try {
+      await loadAudioMetadata(audio, sourceAudioUrl);
+    } catch (error) {
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "This browser could not prepare the source audio clips.",
+      );
+      return;
+    }
+
+    const selectedPlayableIndex = segment
+      ? playableSegments.findIndex((item) => item.id === segment.id)
+      : -1;
+    const startIndex = selectedPlayableIndex >= 0 ? selectedPlayableIndex : 0;
+
+    const playAt = async (index: number) => {
+      if (sourcePlaybackTokenRef.current !== token) {
+        return;
+      }
+
+      const target = playableSegments[index];
+      if (!hasSourceClip(target)) {
+        return;
+      }
+
+      audio.pause();
+      audio.currentTime = target.startMs! / 1000;
+      const stopAt = target.endMs! / 1000;
+      audio.ontimeupdate = () => {
+        if (sourcePlaybackTokenRef.current !== token || audio.currentTime < stopAt) {
+          return;
+        }
+
+        audio.pause();
+        const nextIndex = index + 1;
+        if (nextIndex < playableSegments.length) {
+          void playAt(nextIndex);
+          return;
+        }
+
+        if (loopClipRef.current) {
+          void playAt(0);
+          return;
+        }
+
+        audio.ontimeupdate = null;
+        setMessage(null);
+      };
+
+      try {
+        await audio.play();
+        setSelectedSegmentId(target.id);
+        setMessage(`Playing Source ${index + 1}/${playableSegments.length}.`);
+      } catch (error) {
+        audio.ontimeupdate = null;
+        setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
+      }
+    };
+
+    await playAt(startIndex);
   };
 
   const playTts = async () => {
@@ -364,6 +542,24 @@ export function PracticeStudio({
     };
 
     await playAt(startIndex);
+  };
+
+  const playSelectedAudio = async () => {
+    if (playbackType === "source") {
+      await playSourceClip();
+      return;
+    }
+
+    await playTts();
+  };
+
+  const playAllSentences = async () => {
+    if (playbackType === "source") {
+      await playAllSource();
+      return;
+    }
+
+    await playAllTts();
   };
 
   const regenerateTts = async () => {
@@ -716,6 +912,11 @@ export function PracticeStudio({
                         Hard
                       </span>
                     ) : null}
+                    {item.isRead ? (
+                      <span className="rounded-full bg-ink/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.16em] text-ink/55">
+                        Read
+                      </span>
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-2">
                     {item.latestAttempt?.pronScore !== null &&
@@ -805,47 +1006,50 @@ export function PracticeStudio({
           )}
         </div>
 
-        <div className="mt-5 flex flex-wrap gap-3">
-          <ActionButton
-            onClick={() =>
-              selectSegment(
-                queueSegments[Math.max(0, selectedIndex - 1)]?.id ?? segment?.id ?? null,
-              )
-            }
-            disabled={!segment || filteredEmpty}
-          >
-            Previous
-          </ActionButton>
-          <ActionButton
-            onClick={() =>
-              selectSegment(
-                queueSegments[Math.min(queueSegments.length - 1, selectedIndex + 1)]?.id ??
-                  segment?.id ??
-                  null,
-              )
-            }
-            disabled={!segment || filteredEmpty}
-          >
-            Next
-          </ActionButton>
-          <ActionButton
-            onClick={playSourceClip}
-            disabled={!segment || !sourceAudioUrl || segment.startMs === null}
-          >
-            Play Source
-          </ActionButton>
-          <ActionButton onClick={playTts} disabled={!segment || !ttsUrl}>
-            Play TTS
-          </ActionButton>
-          <ActionButton
-            onClick={playAllTts}
-            disabled={!segment || !queueSegments.some((item) => item.ttsAudioPath)}
-          >
-            Play All TTS
-          </ActionButton>
-          <ActionButton onClick={regenerateTts} disabled={regeneratingTts}>
-            {regeneratingTts ? "Regenerating..." : "Regenerate TTS"}
-          </ActionButton>
+        <div className="mt-5 space-y-3">
+          <div className="flex flex-wrap gap-3">
+            <ActionButton onClick={goToNextSegment} disabled={!segment || filteredEmpty}>
+              Next
+            </ActionButton>
+            <ActionButton onClick={goToPreviousSegment} disabled={!segment || filteredEmpty}>
+              Previous
+            </ActionButton>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <ActionButton
+              onClick={() => void playSelectedAudio()}
+              disabled={!segment || !canPlaySelectedAudio}
+            >
+              Play Audio
+            </ActionButton>
+            <ActionButton
+              onClick={() => void playAllSentences()}
+              disabled={!segment || !canPlayAllSelectedAudio}
+            >
+              Play All Sentences
+            </ActionButton>
+            <div className="flex rounded-full border border-black/10 bg-white/70 p-1">
+              <TypeButton
+                active={playbackType === "source"}
+                disabled={!sourceTypeAvailable}
+                onClick={() => setPlaybackType("source")}
+              >
+                Source
+              </TypeButton>
+              <TypeButton
+                active={playbackType === "tts"}
+                disabled={!ttsTypeAvailable}
+                onClick={() => setPlaybackType("tts")}
+              >
+                TTS
+              </TypeButton>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <ActionButton onClick={regenerateTts} disabled={regeneratingTts}>
+              {regeneratingTts ? "Regenerating..." : "Regenerate TTS"}
+            </ActionButton>
+          </div>
         </div>
 
         <div className="mt-6 rounded-[28px] border border-black/10 bg-white/75 p-5">
@@ -1047,6 +1251,33 @@ function ActionButton({
       onClick={() => void onClick()}
       disabled={disabled}
       className="rounded-full border border-black/10 bg-white/80 px-4 py-2 text-sm font-semibold text-ink/75 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
+    >
+      {children}
+    </button>
+  );
+}
+
+function TypeButton({
+  active,
+  children,
+  disabled,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`min-w-20 rounded-full px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-40 ${
+        active
+          ? "bg-ink text-white shadow-sm"
+          : "bg-transparent text-ink/65 hover:bg-white/80"
+      }`}
     >
       {children}
     </button>

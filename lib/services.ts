@@ -21,6 +21,7 @@ import {
   updateAttemptAnalysis,
   updateAttemptSegment,
   updateMaterial,
+  updateSegmentRead,
   updateSegmentStarred,
   updateSegmentTtsPath,
   updateUserSettings,
@@ -569,6 +570,23 @@ export const updateSegmentStarredWorkflow = async (input: {
   }
 
   const updatedSegment = await updateSegmentStarred(input.segmentId, input.starred);
+
+  return {
+    segment: updatedSegment,
+    practice: await getPracticeMaterialView(updatedSegment.materialId),
+  };
+};
+
+export const updateSegmentReadWorkflow = async (input: {
+  segmentId: string;
+  isRead: boolean;
+}) => {
+  const segment = await getSegment(input.segmentId);
+  if (!segment) {
+    throw new Error("Segment not found.");
+  }
+
+  const updatedSegment = await updateSegmentRead(input.segmentId, input.isRead);
 
   return {
     segment: updatedSegment,
