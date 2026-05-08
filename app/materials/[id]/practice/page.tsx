@@ -42,6 +42,12 @@ export default async function PracticePage({
             >
               Home
             </Link>
+            <Link
+              href="/settings"
+              className="rounded-full border border-black/10 px-4 py-2 text-sm font-semibold text-ink/75"
+            >
+              Settings
+            </Link>
           </div>
         </div>
 

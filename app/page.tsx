@@ -98,6 +98,12 @@ export default async function HomePage() {
             >
               Azure docs
             </Link>
+            <Link
+              href="/settings"
+              className="text-sm font-semibold text-berry underline decoration-berry/30 underline-offset-4"
+            >
+              Settings
+            </Link>
           </div>
           <MaterialList materials={materials} />
         </div>

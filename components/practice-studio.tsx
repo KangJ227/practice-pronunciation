@@ -47,6 +47,7 @@ export function PracticeStudio({
   const [aiPendingId, setAiPendingId] = useState<string | null>(null);
   const [deletingAttemptId, setDeletingAttemptId] = useState<string | null>(null);
   const [starPendingId, setStarPendingId] = useState<string | null>(null);
+  const [regeneratingTts, setRegeneratingTts] = useState(false);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState<string | null>(practice.material.statusDetail);
   const [loopClip, setLoopClip] = useState(false);
@@ -55,6 +56,8 @@ export function PracticeStudio({
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<Record<string, string>>({});
   const sourceAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const loopClipRef = useRef(loopClip);
+  const ttsPlaybackTokenRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const previousPreviewUrlRef = useRef<string | null>(null);
@@ -75,9 +78,45 @@ export function PracticeStudio({
     ? getCurrentAttempt(segment, selectedAttemptIds[segment.id] ?? null)
     : null;
 
+  const cancelTtsPlayback = () => {
+    ttsPlaybackTokenRef.current += 1;
+    const audio = ttsAudioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.pause();
+    audio.loop = false;
+    audio.onended = null;
+  };
+
+  const pauseSourcePlayback = () => {
+    const audio = sourceAudioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    audio.pause();
+    audio.ontimeupdate = null;
+  };
+
+  const selectSegment = (segmentId: string | null) => {
+    pauseSourcePlayback();
+    cancelTtsPlayback();
+    setSelectedSegmentId(segmentId);
+  };
+
   useEffect(() => {
     setPractice(initialPractice);
   }, [initialPractice]);
+
+  useEffect(() => {
+    loopClipRef.current = loopClip;
+    const audio = ttsAudioRef.current;
+    if (audio?.onended === null) {
+      audio.loop = loopClip;
+    }
+  }, [loopClip]);
 
   useEffect(() => {
     setSelectedSegmentId((current) => {
@@ -101,6 +140,7 @@ export function PracticeStudio({
     return () => {
       sourceAudioRef.current?.pause();
       ttsAudioRef.current?.pause();
+      ttsPlaybackTokenRef.current += 1;
       recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -141,6 +181,7 @@ export function PracticeStudio({
       return;
     }
 
+    cancelTtsPlayback();
     const audio = sourceAudioRef.current;
     if (!audio) {
       return;
@@ -162,7 +203,7 @@ export function PracticeStudio({
     const stopAt = segment.endMs / 1000;
     audio.ontimeupdate = () => {
       if (audio.currentTime >= stopAt) {
-        if (loopClip) {
+        if (loopClipRef.current) {
           audio.currentTime = segment.startMs! / 1000;
           void audio.play();
         } else {
@@ -191,13 +232,109 @@ export function PracticeStudio({
       return;
     }
 
+    pauseSourcePlayback();
+    ttsPlaybackTokenRef.current += 1;
     audio.pause();
+    audio.onended = null;
+    audio.loop = loopClipRef.current;
     try {
       audio.src = ttsUrl;
       await audio.play();
       setMessage(null);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
+    }
+  };
+
+  const playAllTts = async () => {
+    const playableSegments = queueSegments.filter((item) => item.ttsAudioPath);
+    if (playableSegments.length === 0) {
+      setMessage("Reference TTS is not available for this practice queue yet.");
+      return;
+    }
+
+    const audio = ttsAudioRef.current;
+    if (!audio) {
+      return;
+    }
+
+    pauseSourcePlayback();
+    const token = ttsPlaybackTokenRef.current + 1;
+    ttsPlaybackTokenRef.current = token;
+    audio.loop = false;
+
+    const selectedPlayableIndex = segment
+      ? playableSegments.findIndex((item) => item.id === segment.id)
+      : -1;
+    const startIndex = selectedPlayableIndex >= 0 ? selectedPlayableIndex : 0;
+
+    const playAt = async (index: number) => {
+      if (ttsPlaybackTokenRef.current !== token) {
+        return;
+      }
+
+      const target = playableSegments[index];
+      const url = mediaUrl(target.ttsAudioPath);
+      if (!url) {
+        return;
+      }
+
+      audio.pause();
+      audio.onended = () => {
+        const nextIndex = index + 1;
+        if (nextIndex < playableSegments.length) {
+          void playAt(nextIndex);
+          return;
+        }
+
+        if (loopClipRef.current) {
+          void playAt(0);
+          return;
+        }
+
+        audio.onended = null;
+        setMessage(null);
+      };
+
+      try {
+        audio.src = url;
+        await audio.play();
+        setSelectedSegmentId(target.id);
+        setMessage(`Playing TTS ${index + 1}/${playableSegments.length}.`);
+      } catch (error) {
+        audio.onended = null;
+        setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
+      }
+    };
+
+    await playAt(startIndex);
+  };
+
+  const regenerateTts = async () => {
+    setRegeneratingTts(true);
+    setMessage("Regenerating TTS with your current settings...");
+
+    try {
+      cancelTtsPlayback();
+      pauseSourcePlayback();
+      const response = await fetch(`/api/materials/${practice.material.id}/tts/regenerate`, {
+        method: "POST",
+      });
+      const payload = (await response.json()) as {
+        error?: string;
+        practice?: PracticeMaterialView;
+      };
+
+      if (!response.ok || !payload.practice) {
+        throw new Error(payload.error || "Failed to regenerate TTS.");
+      }
+
+      setPractice(payload.practice);
+      setMessage("TTS regenerated for this material.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Failed to regenerate TTS.");
+    } finally {
+      setRegeneratingTts(false);
     }
   };
 
@@ -508,7 +645,7 @@ export function PracticeStudio({
                     ? "border-berry/30 bg-berry/10 shadow-sm"
                     : "border-black/10 bg-paper/70 hover:bg-paper"
                 }`}
-                onClick={() => setSelectedSegmentId(item.id)}
+                onClick={() => selectSegment(item.id)}
               >
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
@@ -586,7 +723,7 @@ export function PracticeStudio({
               checked={loopClip}
               onChange={(event) => setLoopClip(event.target.checked)}
             />
-            Loop source clip
+            Loop reference audio
           </label>
         </div>
 
@@ -614,7 +751,7 @@ export function PracticeStudio({
         <div className="mt-5 flex flex-wrap gap-3">
           <ActionButton
             onClick={() =>
-              setSelectedSegmentId(
+              selectSegment(
                 queueSegments[Math.max(0, selectedIndex - 1)]?.id ?? segment?.id ?? null,
               )
             }
@@ -624,7 +761,7 @@ export function PracticeStudio({
           </ActionButton>
           <ActionButton
             onClick={() =>
-              setSelectedSegmentId(
+              selectSegment(
                 queueSegments[Math.min(queueSegments.length - 1, selectedIndex + 1)]?.id ??
                   segment?.id ??
                   null,
@@ -642,6 +779,15 @@ export function PracticeStudio({
           </ActionButton>
           <ActionButton onClick={playTts} disabled={!segment || !ttsUrl}>
             Play TTS
+          </ActionButton>
+          <ActionButton
+            onClick={playAllTts}
+            disabled={!segment || !queueSegments.some((item) => item.ttsAudioPath)}
+          >
+            Play All TTS
+          </ActionButton>
+          <ActionButton onClick={regenerateTts} disabled={regeneratingTts}>
+            {regeneratingTts ? "Regenerating..." : "Regenerate TTS"}
           </ActionButton>
         </div>
 

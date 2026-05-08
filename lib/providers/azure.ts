@@ -62,12 +62,17 @@ export const getFastTranscriptionLocales = (locale: string) => {
   return fastTranscriptionLocales.has(normalized) ? [normalized] : [];
 };
 
-export const synthesizeSentenceAudio = async (text: string, locale = appConfig.locale) => {
+export const synthesizeSentenceAudio = async (
+  text: string,
+  locale = appConfig.locale,
+  voiceName = appConfig.speechVoice,
+) => {
   const { key, region } = ensureAzureConfig();
+  const normalizedVoice = voiceName.trim() || appConfig.speechVoice;
 
   const ssml = `
     <speak version="1.0" xml:lang="${locale}">
-      <voice name="${appConfig.speechVoice}">
+      <voice name="${escapeXmlAttribute(normalizedVoice)}">
         <prosody rate="0%">
           ${escapeXml(text)}
         </prosody>
@@ -479,6 +484,8 @@ const escapeXml = (value: string) =>
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&apos;");
+
+const escapeXmlAttribute = escapeXml;
 
 export const inferAudioMime = (fileName: string) => {
   const extension = path.extname(fileName).toLowerCase();
