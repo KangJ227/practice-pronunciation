@@ -21,7 +21,7 @@ const contentTypeFor = (storageKey: string) => {
 
 const canProxyDownload = (storageKey: string) => {
   const extension = storageKey.split(".").pop()?.toLowerCase();
-  return extension === "json" || extension === "md" || extension === "txt";
+  return extension === "json" || extension === "md" || extension === "txt" || extension === "mp3";
 };
 
 export async function GET(
