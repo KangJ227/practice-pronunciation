@@ -236,6 +236,31 @@ export const createAudioMaterialUploadWorkflow = async (input: {
   };
 };
 
+export const createRecordingMaterialUploadWorkflow = async (input: {
+  title: string;
+  filename: string;
+  locale?: string;
+}) => {
+  const locale = input.locale ?? appConfig.locale;
+  const material = await createMaterial({
+    kind: "audio",
+    locale,
+    title: input.title.trim() || "Direct recording",
+    sourceText: "",
+    status: "draft",
+    statusDetail: null,
+  });
+
+  return {
+    material,
+    upload: await createSignedStorageUpload(
+      `materials/${material.id}/source`,
+      input.filename,
+      "source",
+    ),
+  };
+};
+
 export const processAudioMaterialUploadWorkflow = async (input: {
   materialId: string;
   storageKey: string;
@@ -271,11 +296,50 @@ export const processAudioMaterialUploadWorkflow = async (input: {
   }
 };
 
+export const processRecordingMaterialUploadWorkflow = async (input: {
+  materialId: string;
+  storageKey: string;
+  filename: string;
+}) => {
+  const material = await getMaterial(input.materialId);
+  if (!material) {
+    throw new Error("Material not found.");
+  }
+
+  const expectedPrefix = await scopeStorageKey(`materials/${material.id}/source`);
+  if (!input.storageKey.startsWith(`${expectedPrefix}/`)) {
+    throw new Error("Uploaded recording path does not belong to this material.");
+  }
+
+  const temp = await writeTempBuffer(
+    path.posix.basename(input.filename),
+    await readStorageFile(input.storageKey),
+  );
+
+  try {
+    return await processAudioMaterialSource({
+      material,
+      saved: {
+        storageKey: input.storageKey,
+        fullPath: temp.fullPath,
+      },
+      originalFilename: input.filename,
+      locale: material.locale,
+      forceSingleSegment: true,
+      createSourceAttempt: true,
+    });
+  } finally {
+    await removeTempFile(temp.fullPath);
+  }
+};
+
 const processAudioMaterialSource = async (input: {
   material: StudyMaterial;
   saved: SavedAudioFile;
   originalFilename: string;
   locale: string;
+  forceSingleSegment?: boolean;
+  createSourceAttempt?: boolean;
 }) => {
   const { material, saved, originalFilename, locale } = input;
   await updateMaterial(material.id, { sourceAudioPath: saved.storageKey });
@@ -321,7 +385,9 @@ const processAudioMaterialSource = async (input: {
       transcription = await transcribeAudioWithSdk(wavPath, locale);
     }
 
-    const initialSegments = buildSegmentsFromTranscription(transcription);
+    const initialSegments = input.forceSingleSegment
+      ? buildSingleSegmentFromTranscription(transcription)
+      : buildSegmentsFromTranscription(transcription);
     const persistedSegments = await replaceSegments(material.id, initialSegments);
 
     await updateMaterial(material.id, {
@@ -332,6 +398,23 @@ const processAudioMaterialSource = async (input: {
     });
 
     await generateReferenceAudio((await getMaterial(material.id))!, persistedSegments);
+
+    if (input.createSourceAttempt && persistedSegments[0]) {
+      try {
+        await scoreAttemptAudio({
+          segmentId: persistedSegments[0].id,
+          saved,
+          removeRawAfterNormalize: false,
+        });
+      } catch (error) {
+        await updateMaterial(material.id, {
+          statusDetail:
+            error instanceof Error
+              ? `Transcription and TTS are ready, but initial scoring failed: ${error.message}`
+              : "Transcription and TTS are ready, but initial scoring failed.",
+        });
+      }
+    }
 
     return {
       material: (await getMaterial(material.id))!,
@@ -659,6 +742,7 @@ export const processAttemptUploadWorkflow = async (input: {
 const scoreAttemptAudio = async (input: {
   segmentId: string;
   saved: SavedAudioFile;
+  removeRawAfterNormalize?: boolean;
 }) => {
   const segment = await getSegment(input.segmentId);
   if (!segment) {
@@ -685,7 +769,9 @@ const scoreAttemptAudio = async (input: {
     `${path.basename(saved.storageKey, path.extname(saved.storageKey))}.wav`,
   );
   const wavPath = await convertToMonoWav(saved.fullPath, wavStorageKey);
-  await removeStorageFile(saved.storageKey);
+  if (input.removeRawAfterNormalize ?? true) {
+    await removeStorageFile(saved.storageKey);
+  }
 
   const pronunciation = await runPronunciationAssessment(segment.text, wavPath);
 
@@ -1004,6 +1090,32 @@ const buildSegmentsFromTranscription = (transcription: FastTranscriptionResult) 
         : null,
     source: "transcription" as const,
   }));
+
+const buildSingleSegmentFromTranscription = (transcription: FastTranscriptionResult) => {
+  const firstPhrase = transcription.phrases[0];
+  const lastPhrase = transcription.phrases[transcription.phrases.length - 1];
+  const text = normalizeSentenceText(
+    transcription.fullText || transcription.phrases.map((phrase) => phrase.text).join(" "),
+  );
+  if (!text) {
+    throw new Error("Azure did not return enough transcript text to create a practice sentence.");
+  }
+
+  return [
+    {
+      index: 0,
+      text,
+      startMs: firstPhrase?.offsetMilliseconds ?? null,
+      endMs:
+        lastPhrase?.offsetMilliseconds !== null &&
+        lastPhrase?.offsetMilliseconds !== undefined &&
+        lastPhrase.durationMilliseconds !== null
+          ? lastPhrase.offsetMilliseconds + lastPhrase.durationMilliseconds
+          : null,
+      source: "transcription" as const,
+    },
+  ];
+};
 
 export const expandSegmentByAutoSplit = (segment: EditableSegmentInput) => {
   const parts = autoSplitSegment(segment.text);

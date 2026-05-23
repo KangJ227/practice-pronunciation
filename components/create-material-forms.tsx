@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { startTransition, useState } from "react";
+import { startTransition, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
   uploadToSignedStorage,
@@ -12,11 +12,161 @@ export function CreateMaterialForms() {
   const router = useRouter();
   const [textPending, setTextPending] = useState(false);
   const [audioPending, setAudioPending] = useState(false);
+  const [recordingPending, setRecordingPending] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [recordingTitle, setRecordingTitle] = useState("");
   const [textError, setTextError] = useState<string | null>(null);
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [recordingError, setRecordingError] = useState<string | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  const processRecordedFile = async (file: File) => {
+    setRecordingPending(true);
+    setRecordingError(null);
+
+    try {
+      const uploadResponse = await fetch("/api/materials/recording/upload", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          title: recordingTitle,
+          filename: file.name,
+        }),
+      });
+      const uploadPayload = (await uploadResponse.json()) as {
+        error?: string;
+        material?: { id: string };
+        upload?: SignedStorageUpload & { storageKey: string };
+      };
+      if (!uploadResponse.ok || !uploadPayload.upload || !uploadPayload.material) {
+        throw new Error(uploadPayload.error || "Failed to prepare recording upload.");
+      }
+
+      await uploadToSignedStorage(uploadPayload.upload, file);
+
+      const processResponse = await fetch("/api/materials/recording/process", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          materialId: uploadPayload.material.id,
+          storageKey: uploadPayload.upload.storageKey,
+          filename: file.name,
+        }),
+      });
+      const payload = (await processResponse.json()) as {
+        error?: string;
+        redirectTo?: string;
+      };
+      if (!processResponse.ok) {
+        throw new Error(payload.error || "Failed to process recording.");
+      }
+
+      startTransition(() => {
+        router.push(payload.redirectTo ?? "/");
+        router.refresh();
+      });
+    } catch (error) {
+      setRecordingError(error instanceof Error ? error.message : "Failed to process recording.");
+    } finally {
+      setRecordingPending(false);
+    }
+  };
+
+  const startDirectRecording = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setRecordingError("This browser does not support microphone capture.");
+      return;
+    }
+
+    try {
+      setRecordingError(null);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          chunksRef.current.push(event.data);
+        }
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        recorder.stream.getTracks().forEach((track) => track.stop());
+        setRecording(false);
+        if (blob.size > 0) {
+          void processRecordedFile(
+            new File([blob], `direct-recording-${Date.now()}.webm`, {
+              type: blob.type,
+            }),
+          );
+        }
+      };
+
+      recorder.start();
+      setRecording(true);
+    } catch (error) {
+      setRecordingError(
+        error instanceof Error ? error.message : "Could not start microphone recording.",
+      );
+    }
+  };
+
+  const stopDirectRecording = () => {
+    recorderRef.current?.stop();
+  };
 
   return (
     <div className="grid gap-6">
+      <section className="rounded-[30px] border border-black/10 bg-white/90 p-6 shadow-card">
+        <SectionHeader
+          eyebrow="Direct Recording"
+          title="Record, transcribe, score"
+          body="Speak a short French line. The app will transcribe it, save the first score, then let you correct the text and generate TTS."
+        />
+        <div className="mt-5 grid gap-4">
+          <label className="grid gap-2 text-sm text-ink/75">
+            Title
+            <input
+              value={recordingTitle}
+              onChange={(event) => setRecordingTitle(event.target.value)}
+              className="rounded-2xl border border-black/10 bg-paper/70 px-4 py-3 outline-none transition focus:border-berry/40 focus:ring-2 focus:ring-berry/10"
+              placeholder="Phrase enregistrée"
+            />
+          </label>
+          <div className="flex flex-wrap gap-3">
+            {!recording ? (
+              <button
+                type="button"
+                className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={recordingPending}
+                onClick={() => void startDirectRecording()}
+              >
+                {recordingPending ? "Processing recording..." : "Start Recording"}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="rounded-full bg-berry px-5 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                onClick={stopDirectRecording}
+              >
+                Stop and Process
+              </button>
+            )}
+          </div>
+          <p className="text-xs leading-5 text-ink/60">
+            Keep direct recordings short. After the transcript opens, edit it to the correct version
+            and save to refresh TTS.
+          </p>
+        </div>
+        {recordingError ? <ErrorText>{recordingError}</ErrorText> : null}
+      </section>
+
       <form
         className="rounded-[30px] border border-black/10 bg-white/85 p-6 shadow-card"
         onSubmit={async (event) => {
