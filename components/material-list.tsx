@@ -14,9 +14,14 @@ type MaterialListItem = StudyMaterial & {
 export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const [bulkPending, setBulkPending] = useState(false);
+  const [errorBulkPending, setErrorBulkPending] = useState(false);
+  const [selectedDeletePending, setSelectedDeletePending] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const errorCount = materials.filter((material) => material.status === "error").length;
+  const selectedCount = selectedIds.length;
+  const allSelected = materials.length > 0 && selectedCount === materials.length;
+  const hasBusyDelete = errorBulkPending || selectedDeletePending || Boolean(pendingId);
 
   if (materials.length === 0) {
     return (
@@ -52,7 +57,7 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
   };
 
   const deleteAllErrorSessions = async () => {
-    setBulkPending(true);
+    setErrorBulkPending(true);
     setError(null);
 
     try {
@@ -72,12 +77,82 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
           : "Failed to delete ERROR sessions.",
       );
     } finally {
-      setBulkPending(false);
+      setErrorBulkPending(false);
+    }
+  };
+
+  const toggleMaterial = (materialId: string) => {
+    setSelectedIds((current) =>
+      current.includes(materialId)
+        ? current.filter((selectedId) => selectedId !== materialId)
+        : [...current, materialId],
+    );
+  };
+
+  const toggleAllMaterials = () => {
+    setSelectedIds(allSelected ? [] : materials.map((material) => material.id));
+  };
+
+  const deleteSelectedSessions = async () => {
+    const sessionLabel = selectedCount === 1 ? "session" : "sessions";
+    if (!window.confirm(`Delete ${selectedCount} selected ${sessionLabel}?`)) {
+      return;
+    }
+
+    setSelectedDeletePending(true);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/materials/bulk-delete", {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids: selectedIds }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) {
+        throw new Error(payload.error || "Failed to delete selected sessions.");
+      }
+
+      setSelectedIds([]);
+      router.refresh();
+    } catch (deleteError) {
+      setError(
+        deleteError instanceof Error
+          ? deleteError.message
+          : "Failed to delete selected sessions.",
+      );
+    } finally {
+      setSelectedDeletePending(false);
     }
   };
 
   return (
     <div className="grid gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-black/10 bg-white/80 p-4">
+        <label className="flex items-center gap-3 text-sm font-semibold text-ink/75">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-ink"
+            checked={allSelected}
+            disabled={hasBusyDelete}
+            onChange={toggleAllMaterials}
+          />
+          Select all sessions
+        </label>
+        <button
+          type="button"
+          className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          disabled={hasBusyDelete || selectedCount === 0}
+          onClick={() => void deleteSelectedSessions()}
+        >
+          {selectedDeletePending
+            ? "Deleting..."
+            : `Delete selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+        </button>
+      </div>
+
       {errorCount > 0 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-berry/20 bg-berry/10 p-4">
           <p className="text-sm font-semibold text-berry">
@@ -86,10 +161,10 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
           <button
             type="button"
             className="rounded-full bg-berry px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={bulkPending || Boolean(pendingId)}
+            disabled={hasBusyDelete}
             onClick={deleteAllErrorSessions}
           >
-            {bulkPending ? "Deleting..." : "Delete ERROR Sessions"}
+            {errorBulkPending ? "Deleting..." : "Delete ERROR Sessions"}
           </button>
         </div>
       ) : null}
@@ -104,23 +179,35 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
           className="rounded-[28px] border border-black/10 bg-white/85 p-5 shadow-card"
         >
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="flex flex-wrap gap-2">
-                <Pill>{material.kind}</Pill>
-                <Pill>{material.status}</Pill>
-                <Pill>{material.locale}</Pill>
+            <div className="flex min-w-0 flex-1 gap-3">
+              <input
+                type="checkbox"
+                className="mt-2 h-4 w-4 shrink-0 accent-ink"
+                aria-label={`Select ${material.title}`}
+                checked={selectedIds.includes(material.id)}
+                disabled={hasBusyDelete}
+                onChange={() => toggleMaterial(material.id)}
+              />
+              <div className="min-w-0">
+                <div className="flex flex-wrap gap-2">
+                  <Pill>{material.kind}</Pill>
+                  <Pill>{material.status}</Pill>
+                  <Pill>{material.locale}</Pill>
+                </div>
+                <h3 className="mt-3 font-display text-2xl text-ink">{material.title}</h3>
+                <p className="mt-2 max-w-3xl text-sm leading-6 text-ink/70">
+                  {material.statusDetail ||
+                    material.sourceText.slice(0, 180) ||
+                    "Ready to review."}
+                </p>
               </div>
-              <h3 className="mt-3 font-display text-2xl text-ink">{material.title}</h3>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-ink/70">
-                {material.statusDetail || material.sourceText.slice(0, 180) || "Ready to review."}
-              </p>
             </div>
             <div className="flex flex-wrap gap-3">
               {material.status === "error" ? (
                 <button
                   type="button"
                   className="rounded-full border border-berry/30 px-4 py-2 text-sm font-semibold text-berry transition hover:bg-berry/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={bulkPending || pendingId === material.id}
+                  disabled={errorBulkPending || selectedDeletePending || pendingId === material.id}
                   onClick={() => void deleteErrorSession(material.id)}
                 >
                   {pendingId === material.id ? "Deleting..." : "Delete"}

@@ -598,6 +598,28 @@ export const deleteErrorMaterialsWorkflow = async () => {
   };
 };
 
+export const deleteMaterialsWorkflow = async (materialIds: string[]) => {
+  const uniqueIds = Array.from(new Set(materialIds.map((id) => id.trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    throw new Error("Select at least one session to delete.");
+  }
+
+  const materials = await Promise.all(uniqueIds.map((materialId) => getMaterial(materialId)));
+  const missingId = uniqueIds.find((_, index) => !materials[index]);
+  if (missingId) {
+    throw new Error(`Material not found: ${missingId}`);
+  }
+
+  for (const materialId of uniqueIds) {
+    await deleteMaterialWorkflow(materialId);
+  }
+
+  return {
+    deletedCount: uniqueIds.length,
+    deletedIds: uniqueIds,
+  };
+};
+
 export const updateAttemptAssociationWorkflow = async (input: {
   attemptId: string;
   segmentId: string | null;
