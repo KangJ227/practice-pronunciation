@@ -11,17 +11,26 @@ type MaterialListItem = StudyMaterial & {
   editHref: string;
 };
 
+type ReportFormat = "md" | "pdf";
+
 export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [errorBulkPending, setErrorBulkPending] = useState(false);
   const [selectedDeletePending, setSelectedDeletePending] = useState(false);
+  const [reportPending, setReportPending] = useState<ReportFormat | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const errorCount = materials.filter((material) => material.status === "error").length;
   const selectedCount = selectedIds.length;
   const allSelected = materials.length > 0 && selectedCount === materials.length;
   const hasBusyDelete = errorBulkPending || selectedDeletePending || Boolean(pendingId);
+  const hasBusyAction = hasBusyDelete || Boolean(reportPending);
+  const selectionLabel = allSelected
+    ? `All ${selectedCount} sessions selected`
+    : selectedCount > 0
+      ? `${selectedCount} selected`
+      : "Select all sessions";
 
   if (materials.length === 0) {
     return (
@@ -128,6 +137,47 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
     }
   };
 
+  const downloadSelectedReport = async (format: ReportFormat) => {
+    setReportPending(format);
+    setError(null);
+
+    try {
+      const response = await fetch("/api/materials/word-report", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ ids: selectedIds, format }),
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error || "Failed to build word score report.");
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = getDownloadFilename(
+        response.headers.get("Content-Disposition"),
+        `low-word-score-report.${format}`,
+      );
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (reportError) {
+      setError(
+        reportError instanceof Error
+          ? reportError.message
+          : "Failed to build word score report.",
+      );
+    } finally {
+      setReportPending(null);
+    }
+  };
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-black/10 bg-white/80 p-4">
@@ -136,21 +186,39 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
             type="checkbox"
             className="h-4 w-4 accent-ink"
             checked={allSelected}
-            disabled={hasBusyDelete}
+            disabled={hasBusyAction}
             onChange={toggleAllMaterials}
           />
-          Select all sessions
+          {selectionLabel}
         </label>
-        <button
-          type="button"
-          className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          disabled={hasBusyDelete || selectedCount === 0}
-          onClick={() => void deleteSelectedSessions()}
-        >
-          {selectedDeletePending
-            ? "Deleting..."
-            : `Delete selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className="rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink/75 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={hasBusyAction || selectedCount === 0}
+            onClick={() => void downloadSelectedReport("md")}
+          >
+            {reportPending === "md" ? "Building MD..." : "Download MD"}
+          </button>
+          <button
+            type="button"
+            className="rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink/75 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={hasBusyAction || selectedCount === 0}
+            onClick={() => void downloadSelectedReport("pdf")}
+          >
+            {reportPending === "pdf" ? "Building PDF..." : "Download PDF"}
+          </button>
+          <button
+            type="button"
+            className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={hasBusyAction || selectedCount === 0}
+            onClick={() => void deleteSelectedSessions()}
+          >
+            {selectedDeletePending
+              ? "Deleting..."
+              : `Delete selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+          </button>
+        </div>
       </div>
 
       {errorCount > 0 ? (
@@ -161,7 +229,7 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
           <button
             type="button"
             className="rounded-full bg-berry px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={hasBusyDelete}
+            disabled={hasBusyAction}
             onClick={deleteAllErrorSessions}
           >
             {errorBulkPending ? "Deleting..." : "Delete ERROR Sessions"}
@@ -185,7 +253,7 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
                 className="mt-2 h-4 w-4 shrink-0 accent-ink"
                 aria-label={`Select ${material.title}`}
                 checked={selectedIds.includes(material.id)}
-                disabled={hasBusyDelete}
+                disabled={hasBusyAction}
                 onChange={() => toggleMaterial(material.id)}
               />
               <div className="min-w-0">
@@ -207,7 +275,7 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
                 <button
                   type="button"
                   className="rounded-full border border-berry/30 px-4 py-2 text-sm font-semibold text-berry transition hover:bg-berry/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={errorBulkPending || selectedDeletePending || pendingId === material.id}
+                  disabled={hasBusyAction || pendingId === material.id}
                   onClick={() => void deleteErrorSession(material.id)}
                 >
                   {pendingId === material.id ? "Deleting..." : "Delete"}
@@ -231,6 +299,11 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
       ))}
     </div>
   );
+}
+
+function getDownloadFilename(contentDisposition: string | null, fallback: string) {
+  const match = contentDisposition?.match(/filename="([^"]+)"/);
+  return match?.[1] || fallback;
 }
 
 function Pill({ children }: { children: ReactNode }) {

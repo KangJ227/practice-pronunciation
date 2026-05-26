@@ -13,6 +13,7 @@ import {
   getMaterial,
   getSegment,
   getUserSettings,
+  listAttemptsForMaterials,
   listAttemptsForMaterial,
   listMaterials,
   listSegmentsByMaterial,
@@ -77,6 +78,7 @@ import {
   writeTempBuffer,
 } from "@/lib/storage";
 import { createId, nowIso } from "@/lib/utils";
+import { buildLowWordScoreReport } from "@/lib/word-score-report";
 
 const ttsErrorMessage =
   "Azure Speech is not configured, so reference TTS audio could not be generated yet.";
@@ -619,6 +621,30 @@ export const deleteMaterialsWorkflow = async (materialIds: string[]) => {
     deletedCount: uniqueIds.length,
     deletedIds: uniqueIds,
   };
+};
+
+export const getLowWordScoreReportWorkflow = async (materialIds: string[]) => {
+  const uniqueIds = Array.from(new Set(materialIds.map((id) => id.trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    throw new Error("Select at least one session to report.");
+  }
+
+  const allMaterials = await listMaterials();
+  const materialsById = new Map(allMaterials.map((material) => [material.id, material]));
+  const missingId = uniqueIds.find((materialId) => !materialsById.has(materialId));
+  if (missingId) {
+    throw new Error(`Material not found: ${missingId}`);
+  }
+
+  const materials = uniqueIds
+    .map((materialId) => materialsById.get(materialId))
+    .filter((material): material is StudyMaterial => Boolean(material));
+  const attempts = await listAttemptsForMaterials(uniqueIds);
+
+  return buildLowWordScoreReport({
+    materials,
+    attempts,
+  });
 };
 
 export const updateAttemptAssociationWorkflow = async (input: {

@@ -548,6 +548,27 @@ export const listAttemptsForMaterial = async (materialId: string) => {
   return (data ?? []).map(rowToAttempt);
 };
 
+export const listAttemptsForMaterials = async (materialIds: string[]) => {
+  const uniqueIds = Array.from(new Set(materialIds.map((id) => id.trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return [];
+  }
+
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .select("*")
+    .eq("user_id", userId)
+    .in("material_id", uniqueIds)
+    .order("created_at", { ascending: false });
+
+  if (error) {
+    fail("Failed to list attempts", error);
+  }
+
+  return (data ?? []).map(rowToAttempt);
+};
+
 export const listLatestAttemptsBySegment = async (materialId: string) => {
   const attempts = await listAttemptsForMaterial(materialId);
   const latest = new Map<string, PracticeAttempt>();
