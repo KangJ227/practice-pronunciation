@@ -416,7 +416,7 @@ function AttemptAssociationCard({
       <audio
         controls
         preload="metadata"
-        src={mediaUrl(attempt.attemptAudioPath) ?? undefined}
+        src={mediaDownloadUrl(attempt.attemptAudioPath) ?? undefined}
         className="mt-3 w-full"
       />
     </div>
@@ -451,7 +451,7 @@ function UnlinkedAttemptCard({
       <audio
         controls
         preload="metadata"
-        src={mediaUrl(attempt.attemptAudioPath) ?? undefined}
+        src={mediaDownloadUrl(attempt.attemptAudioPath) ?? undefined}
         className="mt-3 w-full"
       />
       <div className="mt-3 flex flex-wrap items-center gap-3">
@@ -544,6 +544,11 @@ const formatMs = (value: number | null) => {
 
 const mediaUrl = (storageKey: string | null | undefined) =>
   storageKey ? `/api/media/${storageKey}` : null;
+
+const mediaDownloadUrl = (storageKey: string | null | undefined) => {
+  const url = mediaUrl(storageKey);
+  return url ? `${url}?download=1` : null;
+};
 
 const formatAttemptTime = (value: string) =>
   new Date(value).toLocaleString("en-US", {

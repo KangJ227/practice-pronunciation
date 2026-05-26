@@ -88,7 +88,7 @@ const parseDurationSeconds = (output: string) => {
   return Number(hours) * 3600 + Number(minutes) * 60 + Number(seconds);
 };
 
-const convertablePlaybackExtensions = new Set([".ogg", ".opus", ".webm"]);
+const convertablePlaybackExtensions = new Set([".ogg", ".opus", ".webm", ".wav"]);
 
 export const shouldConvertToPlaybackMp3 = (storageKey: string) =>
   convertablePlaybackExtensions.has(path.extname(storageKey).toLowerCase());

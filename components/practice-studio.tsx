@@ -1525,7 +1525,7 @@ function AttemptHistoryCard({
       <audio
         controls
         preload="metadata"
-        src={mediaUrl(attempt.attemptAudioPath) ?? undefined}
+        src={mediaDownloadUrl(attempt.attemptAudioPath) ?? undefined}
         className="mt-3 w-full"
       />
       <FeedbackFileLinks attempt={attempt} />
