@@ -479,6 +479,23 @@ export const updateAttemptAnalysis = async (
   return rowToAttempt(data);
 };
 
+export const updateAttemptAudioPath = async (attemptId: string, attemptAudioPath: string) => {
+  const userId = await currentUserId();
+  const { data, error } = await admin()
+    .from("practice_attempts")
+    .update({ attempt_audio_path: attemptAudioPath })
+    .eq("user_id", userId)
+    .eq("id", attemptId)
+    .select("*")
+    .single();
+
+  if (error) {
+    fail("Failed to update attempt audio", error);
+  }
+
+  return rowToAttempt(data);
+};
+
 export const updateAttemptSegment = async (attemptId: string, segmentId: string | null) => {
   const userId = await currentUserId();
   const { data, error } = await admin()

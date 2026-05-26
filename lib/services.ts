@@ -21,6 +21,7 @@ import {
   listWeakPatterns,
   replaceSegments,
   updateAttemptAnalysis,
+  updateAttemptAudioPath,
   updateAttemptSegment,
   updateMaterial,
   updateSegmentRead,
@@ -64,6 +65,7 @@ import type {
 import {
   convertToMonoWav,
   ensureAttemptAudioLimit,
+  ensurePlaybackMp3,
   ensureMaterialAudioLimit,
   saveUploadedFile,
 } from "@/lib/audio";
@@ -504,7 +506,11 @@ export const getPracticeMaterialView = async (materialId: string): Promise<Pract
   const segments = await listSegmentsByMaterial(materialId);
   const attemptsBySegment = new Map<string, PracticeAttempt[]>();
   const unlinkedAttempts: PracticeAttempt[] = [];
-  for (const attempt of await listAttemptsForMaterial(materialId)) {
+  const attempts = await Promise.all(
+    (await listAttemptsForMaterial(materialId)).map(ensureAttemptPlaybackAudio),
+  );
+
+  for (const attempt of attempts) {
     if (!attempt.segmentId) {
       unlinkedAttempts.push(attempt);
       continue;
@@ -534,6 +540,22 @@ export const getPracticeMaterialView = async (materialId: string): Promise<Pract
     unlinkedAttempts,
     focusItems: buildFocusItems(weakPatterns),
   };
+};
+
+const ensureAttemptPlaybackAudio = async (attempt: PracticeAttempt) => {
+  try {
+    const playbackStorageKey = await scopeStorageKey(
+      await ensurePlaybackMp3(attempt.attemptAudioPath),
+    );
+
+    if (playbackStorageKey === attempt.attemptAudioPath) {
+      return attempt;
+    }
+
+    return updateAttemptAudioPath(attempt.id, playbackStorageKey);
+  } catch {
+    return attempt;
+  }
 };
 
 export const recomputeHighlightsWorkflow = async (materialId: string) => {
@@ -823,6 +845,7 @@ const scoreAttemptAudio = async (input: {
   }
 
   const pronunciation = await runPronunciationAssessment(segment.text, wavPath);
+  const attemptAudioPath = await scopeStorageKey(await ensurePlaybackMp3(wavStorageKey));
 
   const attemptId = createId();
   const createdAt = nowIso();
@@ -830,7 +853,7 @@ const scoreAttemptAudio = async (input: {
     id: attemptId,
     materialId: material.id,
     segmentId: segment.id,
-    attemptAudioPath: wavStorageKey,
+    attemptAudioPath,
     feedbackJsonPath: null,
     feedbackMarkdownPath: null,
     recognizedText: pronunciation.recognizedText,
@@ -849,7 +872,7 @@ const scoreAttemptAudio = async (input: {
     createdAt: attemptDraft.createdAt,
     materialId: material.id,
     segmentId: segment.id,
-    attemptAudioPath: wavStorageKey,
+    attemptAudioPath,
     feedbackJsonPath: attemptDraft.feedbackJsonPath,
     feedbackMarkdownPath: attemptDraft.feedbackMarkdownPath,
     recognizedText: pronunciation.recognizedText,

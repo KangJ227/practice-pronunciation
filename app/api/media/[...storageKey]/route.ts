@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireUser } from "@/lib/auth";
 import { ensurePlaybackMp3 } from "@/lib/audio";
+import { resolveUserMediaStorageKey } from "@/lib/media";
 import { createSignedStorageUrl, readStorageFile } from "@/lib/storage";
 
 export const runtime = "nodejs";
@@ -31,11 +32,7 @@ export async function GET(
   try {
     const user = await requireUser();
     const { storageKey } = await context.params;
-    const joined = storageKey.join("/");
-
-    if (!joined.startsWith(`${user.id}/`)) {
-      return new Response("Forbidden", { status: 403 });
-    }
+    const joined = resolveUserMediaStorageKey(storageKey.join("/"), user.id);
 
     const mediaStorageKey = await ensurePlaybackMp3(joined);
     const requestUrl = new URL(request.url);
