@@ -1,4 +1,5 @@
 import { appConfig, isKimiConfigured } from "@/lib/config";
+import { LOW_WORD_SCORE_THRESHOLD } from "@/lib/pronunciation-thresholds";
 import { inferWeakPatternTypeForToken } from "@/lib/text";
 import type { KimiAnalysis, WeakPattern, WordAssessment } from "@/lib/types";
 
@@ -122,7 +123,7 @@ const fallbackAnalysis = (input: AnalyzeInput, warning?: string): KimiAnalysis =
   const lowWords = input.wordResults
     .filter((word) => {
       const score = word.accuracyScore ?? 100;
-      return score < 75 || /omission|insertion/i.test(word.errorType ?? "");
+      return score < LOW_WORD_SCORE_THRESHOLD || /omission|insertion/i.test(word.errorType ?? "");
     })
     .slice(0, 6);
 

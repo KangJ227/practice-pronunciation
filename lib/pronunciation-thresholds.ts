@@ -1,0 +1,1 @@
+export const LOW_WORD_SCORE_THRESHOLD = 70;

@@ -2,6 +2,7 @@ import path from "node:path";
 import { promises as fs } from "node:fs";
 import { writeAttemptFeedbackArtifacts } from "@/lib/attempt-feedback";
 import { appConfig, isAzureSpeechConfigured } from "@/lib/config";
+import { LOW_WORD_SCORE_THRESHOLD } from "@/lib/pronunciation-thresholds";
 import {
   addWeakPatternEvidence,
   createAttempt,
@@ -961,7 +962,7 @@ const rememberWeakPatterns = async (input: {
 
     const score = word.accuracyScore ?? 100;
     const hasStrongError = /omission|insertion/i.test(word.errorType ?? "");
-    const isLowWord = score < 75;
+    const isLowWord = score < LOW_WORD_SCORE_THRESHOLD;
 
     if (!hasStrongError && !isLowWord) {
       continue;

@@ -15,6 +15,7 @@ import type {
   PracticeSegmentView,
 } from "@/lib/types";
 import { getPreviewUrlToRevoke } from "@/lib/local-attempt-preview";
+import { LOW_WORD_SCORE_THRESHOLD } from "@/lib/pronunciation-thresholds";
 import {
   uploadToSignedStorage,
   type SignedStorageUpload,
@@ -1309,6 +1310,12 @@ function AttemptPanel({
   onDeleteAttempt: (attempt: PracticeAttempt) => void;
 }) {
   const attempt = currentAttempt;
+  const lowScoringWords =
+    attempt?.wordResultsJson.filter(
+      (word) =>
+        typeof word.accuracyScore === "number" &&
+        word.accuracyScore < LOW_WORD_SCORE_THRESHOLD,
+    ) ?? [];
 
   return (
     <div className="rounded-[28px] border border-black/10 bg-white/75 p-5 shadow-card">
@@ -1363,22 +1370,25 @@ function AttemptPanel({
             />
             {attempt.wordResultsJson.length > 0 ? (
               <div>
-                <p className="text-sm font-semibold text-ink">Word-level flags</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {attempt.wordResultsJson.map((word) => (
-                    <span
-                      key={`${word.word}-${word.errorType}`}
-                      className={`rounded-full px-3 py-1 text-xs font-semibold ${
-                        (word.accuracyScore ?? 100) < 75 ||
-                        /omission|insertion/i.test(word.errorType ?? "")
-                          ? "bg-berry/10 text-berry"
-                          : "bg-paper text-ink/70"
-                      }`}
-                    >
-                      {word.word} {word.accuracyScore !== null ? `${word.accuracyScore}` : "n/a"}
-                    </span>
-                  ))}
-                </div>
+                <p className="text-sm font-semibold text-ink">
+                  Words under {LOW_WORD_SCORE_THRESHOLD}
+                </p>
+                {lowScoringWords.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {lowScoringWords.map((word, index) => (
+                      <span
+                        key={`${word.word}-${word.errorType}-${index}`}
+                        className="rounded-full bg-berry/10 px-3 py-1 text-xs font-semibold text-berry"
+                      >
+                        {word.word} {word.accuracyScore}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm leading-6 text-ink/65">
+                    No words below {LOW_WORD_SCORE_THRESHOLD} in this feedback.
+                  </p>
+                )}
               </div>
             ) : null}
           </div>
