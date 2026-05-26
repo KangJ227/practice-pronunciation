@@ -992,7 +992,11 @@ export function PracticeStudio({
               <p className="text-sm font-semibold uppercase tracking-[0.16em] text-brass">
                 Target Text
               </p>
-              <HighlightedSentence text={segment.text} highlights={segment.highlights} />
+              <HighlightedSentence
+                text={segment.text}
+                highlights={segment.highlights}
+                currentAttempt={currentAttempt}
+              />
             </>
           ) : (
             <>
@@ -1208,17 +1212,48 @@ const loadAudioMetadata = async (audio: HTMLAudioElement, url: string) => {
 function HighlightedSentence({
   text,
   highlights,
+  currentAttempt,
 }: {
   text: string;
   highlights: HighlightToken[];
+  currentAttempt: PracticeAttempt | null;
 }) {
   const highlightMap = new Map(highlights.map((item) => [item.normalized, item]));
+  const scoreMap = new Map(
+    currentAttempt?.wordResultsJson
+      .filter(
+        (word) =>
+          typeof word.accuracyScore === "number" &&
+          word.accuracyScore < LOW_WORD_SCORE_THRESHOLD,
+      )
+      .map((word) => [
+        word.word.toLowerCase().replace(/^[^\p{L}\p{M}]+|[^\p{L}\p{M}]+$/gu, ""),
+        word.accuracyScore,
+      ]) ?? [],
+  );
   const parts = text.split(/(\s+)/);
 
   return (
     <p className="mt-3 text-2xl leading-[1.8] text-ink">
       {parts.map((part, index) => {
         const normalized = part.toLowerCase().replace(/^[^\p{L}\p{M}]+|[^\p{L}\p{M}]+$/gu, "");
+        const currentScore = scoreMap.get(normalized);
+        if (currentScore !== undefined) {
+          return (
+            <span
+              key={`${part}-${index}`}
+              title={`Current feedback score: ${currentScore}`}
+              className="rounded-lg bg-berry/12 px-1 text-berry"
+            >
+              {part}
+            </span>
+          );
+        }
+
+        if (currentAttempt) {
+          return <span key={`${part}-${index}`}>{part}</span>;
+        }
+
         const highlight = highlightMap.get(normalized);
         if (!highlight) {
           return <span key={`${part}-${index}`}>{part}</span>;
