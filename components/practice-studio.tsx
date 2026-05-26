@@ -1108,6 +1108,9 @@ export function PracticeStudio({
           ) : null}
         </div>
 
+      </div>
+
+      <aside className="space-y-6 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)] xl:overflow-y-auto xl:pr-1">
         {segment ? (
           <AttemptPanel
             segment={segment}
@@ -1124,13 +1127,11 @@ export function PracticeStudio({
             onDeleteAttempt={(attempt) => void deleteAttemptRecord(attempt)}
           />
         ) : (
-          <div className="mt-6 rounded-[28px] border border-dashed border-black/10 bg-white/75 p-5 text-sm leading-6 text-ink/70">
+          <div className="rounded-[28px] border border-dashed border-black/10 bg-white/75 p-5 text-sm leading-6 text-ink/70">
             No starred recordings to review yet because no sentence is marked as difficult.
           </div>
         )}
-      </div>
 
-      <aside className="space-y-6">
         <div className="rounded-[30px] border border-black/10 bg-white/88 p-5 shadow-card md:p-6">
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brass">
             This Round
@@ -1310,7 +1311,7 @@ function AttemptPanel({
   const attempt = currentAttempt;
 
   return (
-    <div className="mt-6 rounded-[28px] border border-black/10 bg-white/75 p-5">
+    <div className="rounded-[28px] border border-black/10 bg-white/75 p-5 shadow-card">
       <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brass">Current Feedback</p>
       {localAttemptPreview ? (
         <div className="mt-4 rounded-[22px] border border-dashed border-black/10 bg-paper/70 p-4">
