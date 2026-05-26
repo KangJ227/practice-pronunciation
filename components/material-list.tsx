@@ -11,14 +11,12 @@ type MaterialListItem = StudyMaterial & {
   editHref: string;
 };
 
-type ReportFormat = "md" | "pdf";
-
 export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
   const router = useRouter();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [errorBulkPending, setErrorBulkPending] = useState(false);
   const [selectedDeletePending, setSelectedDeletePending] = useState(false);
-  const [reportPending, setReportPending] = useState<ReportFormat | null>(null);
+  const [reportPending, setReportPending] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const errorCount = materials.filter((material) => material.status === "error").length;
@@ -137,8 +135,9 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
     }
   };
 
-  const downloadSelectedReport = async (format: ReportFormat) => {
-    setReportPending(format);
+  const downloadSelectedReport = async () => {
+    const format = "pdf";
+    setReportPending(true);
     setError(null);
 
     try {
@@ -174,50 +173,48 @@ export function MaterialList({ materials }: { materials: MaterialListItem[] }) {
           : "Failed to build word score report.",
       );
     } finally {
-      setReportPending(null);
+      setReportPending(false);
     }
   };
 
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-black/10 bg-white/80 p-4">
-        <label className="flex items-center gap-3 text-sm font-semibold text-ink/75">
-          <input
-            type="checkbox"
-            className="h-4 w-4 accent-ink"
-            checked={allSelected}
-            disabled={hasBusyAction}
-            onChange={toggleAllMaterials}
-          />
-          {selectionLabel}
-        </label>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            className="rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink/75 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={hasBusyAction || selectedCount === 0}
-            onClick={() => void downloadSelectedReport("md")}
-          >
-            {reportPending === "md" ? "Building MD..." : "Download MD"}
-          </button>
-          <button
-            type="button"
-            className="rounded-full border border-black/10 bg-white/70 px-4 py-2 text-sm font-semibold text-ink/75 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-60"
-            disabled={hasBusyAction || selectedCount === 0}
-            onClick={() => void downloadSelectedReport("pdf")}
-          >
-            {reportPending === "pdf" ? "Building PDF..." : "Download PDF"}
-          </button>
+      <div className="grid gap-4 rounded-[24px] border border-black/10 bg-white/80 p-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+        <div className="flex min-w-0 flex-wrap items-start gap-4">
+          <label className="flex items-center gap-3 text-sm font-semibold text-ink/75">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-ink"
+              checked={allSelected}
+              disabled={hasBusyAction}
+              onChange={toggleAllMaterials}
+            />
+            {selectionLabel}
+          </label>
+          <p className="max-w-xl text-sm leading-6 text-ink/60">
+            Select sessions, then download one PDF report of words under 70, sorted by frequency
+            across every attempt.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 md:justify-end">
           <button
             type="button"
             className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
             disabled={hasBusyAction || selectedCount === 0}
-            onClick={() => void deleteSelectedSessions()}
+            onClick={() => void downloadSelectedReport()}
           >
-            {selectedDeletePending
-              ? "Deleting..."
-              : `Delete selected${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+            {reportPending ? "Building report..." : "Download low-score report"}
           </button>
+          {selectedCount > 0 ? (
+            <button
+              type="button"
+              className="rounded-full border border-berry/30 px-4 py-2 text-sm font-semibold text-berry transition hover:bg-berry/10 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={hasBusyAction}
+              onClick={() => void deleteSelectedSessions()}
+            >
+              {selectedDeletePending ? "Deleting..." : `Delete ${selectedCount}`}
+            </button>
+          ) : null}
         </div>
       </div>
 
