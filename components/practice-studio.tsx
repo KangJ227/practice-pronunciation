@@ -360,9 +360,16 @@ export function PracticeStudio({
 
     try {
       await audio.play();
-      setMessage(null);
+      if (sourcePlaybackTokenRef.current === token) {
+        setMessage(null);
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
+      if (
+        sourcePlaybackTokenRef.current === token &&
+        !isPlayInterruptedByPause(error)
+      ) {
+        setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
+      }
     }
   };
 
@@ -439,11 +446,19 @@ export function PracticeStudio({
 
       try {
         await audio.play();
+        if (sourcePlaybackTokenRef.current !== token) {
+          return;
+        }
         setSelectedSegmentId(target.id);
         setMessage(`Playing Source ${index + 1}/${playableSegments.length}.`);
       } catch (error) {
         audio.ontimeupdate = null;
-        setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
+        if (
+          sourcePlaybackTokenRef.current === token &&
+          !isPlayInterruptedByPause(error)
+        ) {
+          setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
+        }
       }
     };
 
@@ -473,9 +488,13 @@ export function PracticeStudio({
         return;
       }
       await audio.play();
-      setMessage(null);
+      if (ttsPlaybackTokenRef.current === token) {
+        setMessage(null);
+      }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
+      if (ttsPlaybackTokenRef.current === token && !isPlayInterruptedByPause(error)) {
+        setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
+      }
     }
   };
 
@@ -534,11 +553,16 @@ export function PracticeStudio({
           return;
         }
         await audio.play();
+        if (ttsPlaybackTokenRef.current !== token) {
+          return;
+        }
         setSelectedSegmentId(target.id);
         setMessage(`Playing TTS ${index + 1}/${playableSegments.length}.`);
       } catch (error) {
         audio.onended = null;
-        setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
+        if (ttsPlaybackTokenRef.current === token && !isPlayInterruptedByPause(error)) {
+          setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
+        }
       }
     };
 
@@ -1208,6 +1232,11 @@ const loadAudioMetadata = async (audio: HTMLAudioElement, url: string) => {
     audio.addEventListener("error", onError, { once: true });
   });
 };
+
+const isPlayInterruptedByPause = (error: unknown) =>
+  error instanceof DOMException &&
+  error.name === "AbortError" &&
+  error.message.includes("interrupted by a call to pause");
 
 function HighlightedSentence({
   text,
