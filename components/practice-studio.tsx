@@ -71,8 +71,8 @@ export function PracticeStudio({
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<Record<string, string>>({});
   const sourceAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
-  const ttsUrlCacheRef = useRef(new Map<string, string>());
-  const pendingTtsUrlCacheRef = useRef(new Map<string, Promise<string>>());
+  const audioUrlCacheRef = useRef(new Map<string, string>());
+  const pendingAudioUrlCacheRef = useRef(new Map<string, Promise<string>>());
   const loopClipRef = useRef(loopClip);
   const sourcePlaybackTokenRef = useRef(0);
   const ttsPlaybackTokenRef = useRef(0);
@@ -105,9 +105,7 @@ export function PracticeStudio({
   const canPlayAllSelectedAudio =
     playbackType === "source" ? sourceTypeAvailable : ttsTypeAvailable;
 
-  const cancelTtsPlayback = () => {
-    ttsPlaybackTokenRef.current += 1;
-    const audio = ttsAudioRef.current;
+  const stopAudioElement = (audio: HTMLAudioElement | null) => {
     if (!audio) {
       return;
     }
@@ -115,24 +113,36 @@ export function PracticeStudio({
     audio.pause();
     audio.loop = false;
     audio.onended = null;
+    audio.ontimeupdate = null;
   };
 
-  const clearTtsUrlCache = () => {
-    for (const url of ttsUrlCacheRef.current.values()) {
+  const cancelTtsPlayback = () => {
+    ttsPlaybackTokenRef.current += 1;
+    stopAudioElement(ttsAudioRef.current);
+  };
+
+  const clearAudioUrlCache = () => {
+    for (const url of audioUrlCacheRef.current.values()) {
       URL.revokeObjectURL(url);
     }
 
-    ttsUrlCacheRef.current.clear();
-    pendingTtsUrlCacheRef.current.clear();
+    audioUrlCacheRef.current.clear();
+    pendingAudioUrlCacheRef.current.clear();
   };
 
-  const getCachedTtsUrl = async (storageKey: string) => {
-    const cachedUrl = ttsUrlCacheRef.current.get(storageKey);
+  const getCachedAudioUrl = async (
+    storageKey: string,
+    messages: {
+      unavailable: string;
+      failed: string;
+    },
+  ) => {
+    const cachedUrl = audioUrlCacheRef.current.get(storageKey);
     if (cachedUrl) {
       return cachedUrl;
     }
 
-    const pendingUrl = pendingTtsUrlCacheRef.current.get(storageKey);
+    const pendingUrl = pendingAudioUrlCacheRef.current.get(storageKey);
     if (pendingUrl) {
       return pendingUrl;
     }
@@ -140,34 +150,28 @@ export function PracticeStudio({
     const request = (async () => {
       const url = mediaDownloadUrl(storageKey);
       if (!url) {
-        throw new Error("Reference TTS is not available for this sentence yet.");
+        throw new Error(messages.unavailable);
       }
 
       const response = await fetch(url);
       if (!response.ok) {
-        throw new Error("Reference TTS playback failed.");
+        throw new Error(messages.failed);
       }
 
       const objectUrl = URL.createObjectURL(await response.blob());
-      ttsUrlCacheRef.current.set(storageKey, objectUrl);
+      audioUrlCacheRef.current.set(storageKey, objectUrl);
       return objectUrl;
     })().finally(() => {
-      pendingTtsUrlCacheRef.current.delete(storageKey);
+      pendingAudioUrlCacheRef.current.delete(storageKey);
     });
 
-    pendingTtsUrlCacheRef.current.set(storageKey, request);
+    pendingAudioUrlCacheRef.current.set(storageKey, request);
     return request;
   };
 
   const pauseSourcePlayback = () => {
     sourcePlaybackTokenRef.current += 1;
-    const audio = sourceAudioRef.current;
-    if (!audio) {
-      return;
-    }
-
-    audio.pause();
-    audio.ontimeupdate = null;
+    stopAudioElement(sourceAudioRef.current);
   };
 
   const selectSegment = (segmentId: string | null) => {
@@ -276,7 +280,7 @@ export function PracticeStudio({
       sourceAudioRef.current?.pause();
       ttsAudioRef.current?.pause();
       ttsPlaybackTokenRef.current += 1;
-      clearTtsUrlCache();
+      clearAudioUrlCache();
       recorderRef.current?.stream.getTracks().forEach((track) => track.stop());
     };
   }, []);
@@ -308,11 +312,11 @@ export function PracticeStudio({
     );
   }
 
-  const sourceAudioUrl = segment ? mediaUrl(practice.material.sourceAudioPath) : null;
-  const ttsUrl = segment ? mediaUrl(segment.ttsAudioPath) : null;
+  const sourceAudioStorageKey = segment ? practice.material.sourceAudioPath : null;
+  const ttsStorageKey = segment?.ttsAudioPath ?? null;
 
   const playSourceClip = async () => {
-    if (!sourceAudioUrl || segment.startMs === null || segment.endMs === null) {
+    if (!sourceAudioStorageKey || segment.startMs === null || segment.endMs === null) {
       setMessage("This sentence does not have a source-audio clip yet.");
       return;
     }
@@ -325,9 +329,16 @@ export function PracticeStudio({
 
     const token = sourcePlaybackTokenRef.current + 1;
     sourcePlaybackTokenRef.current = token;
-    audio.pause();
+    stopAudioElement(audio);
     try {
-      await loadAudioMetadata(audio, sourceAudioUrl);
+      const playableUrl = await getCachedAudioUrl(sourceAudioStorageKey, {
+        unavailable: "This sentence does not have a source-audio clip yet.",
+        failed: "Source audio playback failed.",
+      });
+      if (sourcePlaybackTokenRef.current !== token) {
+        return;
+      }
+      await loadAudioMetadata(audio, playableUrl);
       if (sourcePlaybackTokenRef.current !== token) {
         return;
       }
@@ -366,7 +377,7 @@ export function PracticeStudio({
     } catch (error) {
       if (
         sourcePlaybackTokenRef.current === token &&
-        !isPlayInterruptedByPause(error)
+        !isPlaybackInterrupted(error)
       ) {
         setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
       }
@@ -374,7 +385,7 @@ export function PracticeStudio({
   };
 
   const playAllSource = async () => {
-    if (!sourceAudioUrl) {
+    if (!sourceAudioStorageKey) {
       setMessage("Source audio is not available for this material.");
       return;
     }
@@ -393,9 +404,17 @@ export function PracticeStudio({
 
     const token = sourcePlaybackTokenRef.current + 1;
     sourcePlaybackTokenRef.current = token;
+    stopAudioElement(audio);
 
     try {
-      await loadAudioMetadata(audio, sourceAudioUrl);
+      const playableUrl = await getCachedAudioUrl(sourceAudioStorageKey, {
+        unavailable: "Source audio is not available for this material.",
+        failed: "Source audio playback failed.",
+      });
+      if (sourcePlaybackTokenRef.current !== token) {
+        return;
+      }
+      await loadAudioMetadata(audio, playableUrl);
     } catch (error) {
       setMessage(
         error instanceof Error
@@ -420,7 +439,7 @@ export function PracticeStudio({
         return;
       }
 
-      audio.pause();
+      stopAudioElement(audio);
       audio.currentTime = target.startMs! / 1000;
       const stopAt = target.endMs! / 1000;
       audio.ontimeupdate = () => {
@@ -455,7 +474,7 @@ export function PracticeStudio({
         audio.ontimeupdate = null;
         if (
           sourcePlaybackTokenRef.current === token &&
-          !isPlayInterruptedByPause(error)
+          !isPlaybackInterrupted(error)
         ) {
           setMessage(error instanceof Error ? error.message : "Source audio playback failed.");
         }
@@ -466,7 +485,7 @@ export function PracticeStudio({
   };
 
   const playTts = async () => {
-    if (!segment?.ttsAudioPath || !ttsUrl) {
+    if (!ttsStorageKey) {
       setMessage("Reference TTS is not available for this sentence yet.");
       return;
     }
@@ -479,11 +498,13 @@ export function PracticeStudio({
     pauseSourcePlayback();
     const token = ttsPlaybackTokenRef.current + 1;
     ttsPlaybackTokenRef.current = token;
-    audio.pause();
-    audio.onended = null;
+    stopAudioElement(audio);
     audio.loop = loopClipRef.current;
     try {
-      audio.src = await getCachedTtsUrl(segment.ttsAudioPath);
+      audio.src = await getCachedAudioUrl(ttsStorageKey, {
+        unavailable: "Reference TTS is not available for this sentence yet.",
+        failed: "Reference TTS playback failed.",
+      });
       if (ttsPlaybackTokenRef.current !== token) {
         return;
       }
@@ -492,7 +513,7 @@ export function PracticeStudio({
         setMessage(null);
       }
     } catch (error) {
-      if (ttsPlaybackTokenRef.current === token && !isPlayInterruptedByPause(error)) {
+      if (ttsPlaybackTokenRef.current === token && !isPlaybackInterrupted(error)) {
         setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
       }
     }
@@ -530,7 +551,7 @@ export function PracticeStudio({
         return;
       }
 
-      audio.pause();
+      stopAudioElement(audio);
       audio.onended = () => {
         const nextIndex = index + 1;
         if (nextIndex < playableSegments.length) {
@@ -548,7 +569,10 @@ export function PracticeStudio({
       };
 
       try {
-        audio.src = await getCachedTtsUrl(target.ttsAudioPath);
+        audio.src = await getCachedAudioUrl(target.ttsAudioPath, {
+          unavailable: "Reference TTS is not available for this sentence yet.",
+          failed: "Reference TTS playback failed.",
+        });
         if (ttsPlaybackTokenRef.current !== token) {
           return;
         }
@@ -560,7 +584,7 @@ export function PracticeStudio({
         setMessage(`Playing TTS ${index + 1}/${playableSegments.length}.`);
       } catch (error) {
         audio.onended = null;
-        if (ttsPlaybackTokenRef.current === token && !isPlayInterruptedByPause(error)) {
+        if (ttsPlaybackTokenRef.current === token && !isPlaybackInterrupted(error)) {
           setMessage(error instanceof Error ? error.message : "Reference TTS playback failed.");
         }
       }
@@ -594,7 +618,7 @@ export function PracticeStudio({
     try {
       cancelTtsPlayback();
       pauseSourcePlayback();
-      clearTtsUrlCache();
+      clearAudioUrlCache();
       const response = await fetch(`/api/materials/${practice.material.id}/tts/regenerate`, {
         method: "POST",
       });
@@ -1233,10 +1257,8 @@ const loadAudioMetadata = async (audio: HTMLAudioElement, url: string) => {
   });
 };
 
-const isPlayInterruptedByPause = (error: unknown) =>
-  error instanceof DOMException &&
-  error.name === "AbortError" &&
-  error.message.includes("interrupted by a call to pause");
+const isPlaybackInterrupted = (error: unknown) =>
+  error instanceof DOMException && error.name === "AbortError";
 
 function HighlightedSentence({
   text,
