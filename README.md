@@ -7,7 +7,7 @@ A private French pronunciation practice web app built with Next.js, Supabase, Az
 - Import French material from pasted text or uploaded audio
 - Split the material into sentence-level practice segments
 - Review, merge, and auto-split segment boundaries before practice
-- Generate per-sentence Azure TTS reference audio
+- Generate per-sentence Azure TTS reference audio, or full-passage ElevenLabs v2 source audio
 - Upload or record one-sentence attempts in the browser
 - Run Azure pronunciation assessment on each attempt
 - Store persistent weak spots and highlight repeated trouble words in red
@@ -20,6 +20,7 @@ A private French pronunciation practice web app built with Next.js, Supabase, Az
 - Tailwind CSS
 - Supabase Postgres and private Storage with app-managed username/password sessions
 - Azure Speech REST + SDK
+- ElevenLabs Text to Speech with timing
 - Kimi Chat Completions API (`https://api.moonshot.cn/v1`)
 - Bundled ffmpeg for server-side audio normalization
 
@@ -45,13 +46,14 @@ SUPABASE_STORAGE_BUCKET=practice-media
 
 5. Fill in `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`.
 6. Optionally fill in `KIMI_API_KEY`.
-7. Install dependencies:
+7. Optionally fill in `ELEVENLABS_API_KEY` and `ELEVENLABS_VOICE_ID` to generate full-passage source audio with ElevenLabs multilingual v2.
+8. Install dependencies:
 
 ```bash
 npm install
 ```
 
-8. Start the app:
+9. Start the app:
 
 ```bash
 npm run dev
@@ -91,6 +93,7 @@ where id = (
 ## Important behavior
 
 - Text materials still work without Azure credentials, but TTS generation is skipped.
+- Text materials can optionally use ElevenLabs v2 to generate one full-passage MP3 with sentence timing. This audio is saved as source audio, so practice mode uses Source clips instead of per-sentence TTS.
 - Audio materials are saved even without Azure credentials, but transcription stays unavailable until Azure Speech is configured.
 - The app is private: pages, APIs, and media require a valid app account session.
 - Practice attempts are always stored; if Azure or Kimi is unavailable, the app falls back to degraded feedback instead of dropping the upload.
@@ -118,6 +121,9 @@ FFMPEG_PATH
 AZURE_SPEECH_KEY
 AZURE_SPEECH_REGION
 AZURE_SPEECH_VOICE=fr-FR-DeniseNeural
+ELEVENLABS_API_KEY
+ELEVENLABS_VOICE_ID
+ELEVENLABS_OUTPUT_FORMAT=mp3_44100_128
 KIMI_API_KEY
 KIMI_BASE_URL=https://api.moonshot.cn/v1
 KIMI_MODEL=kimi-k2.6

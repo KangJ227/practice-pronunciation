@@ -6,6 +6,9 @@ export const appConfig = {
   speechVoice: read("AZURE_SPEECH_VOICE") || "fr-FR-DeniseNeural",
   azureSpeechKey: read("AZURE_SPEECH_KEY"),
   azureSpeechRegion: read("AZURE_SPEECH_REGION"),
+  elevenLabsApiKey: read("ELEVENLABS_API_KEY"),
+  elevenLabsVoiceId: read("ELEVENLABS_VOICE_ID"),
+  elevenLabsOutputFormat: read("ELEVENLABS_OUTPUT_FORMAT") || "mp3_44100_128",
   kimiApiKey: read("KIMI_API_KEY", "MOONSHOT_API_KEY"),
   kimiBaseUrl: read("KIMI_BASE_URL", "MOONSHOT_BASE_URL") || "https://api.moonshot.cn/v1",
   kimiModel: read("KIMI_MODEL") || "kimi-k2.5",
@@ -20,6 +23,9 @@ export const appConfig = {
 
 export const isAzureSpeechConfigured = () =>
   Boolean(appConfig.azureSpeechKey && appConfig.azureSpeechRegion);
+
+export const isElevenLabsConfigured = () =>
+  Boolean(appConfig.elevenLabsApiKey && appConfig.elevenLabsVoiceId);
 
 export const isKimiConfigured = () => Boolean(appConfig.kimiApiKey);
 

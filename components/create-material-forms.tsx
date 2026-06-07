@@ -199,7 +199,7 @@ export function CreateMaterialForms() {
         <SectionHeader
           eyebrow="Text Practice"
           title="Paste text or upload a script"
-          body="The app will split French sentences, create an editable segment list, and prepare reference audio when Azure TTS is available."
+          body="The app will split French sentences, create an editable segment list, and prepare reference audio."
         />
         <div className="mt-5 grid gap-4">
           <label className="grid gap-2 text-sm text-ink/75">
@@ -226,6 +226,22 @@ export function CreateMaterialForms() {
               accept=".txt,.md,text/plain,text/markdown"
               className="rounded-2xl border border-dashed border-black/10 bg-paper/50 px-4 py-3"
             />
+          </label>
+          <label className="flex items-start gap-3 rounded-2xl border border-black/10 bg-white/65 px-4 py-3 text-sm text-ink/75">
+            <input
+              name="referenceMode"
+              type="checkbox"
+              value="elevenlabs-source"
+              className="mt-1"
+            />
+            <span>
+              <span className="block font-semibold text-ink">
+                ElevenLabs v2 source audio
+              </span>
+              <span className="mt-1 block leading-5 text-ink/65">
+                Generate one full-passage reference and practice sentence clips from Source.
+              </span>
+            </span>
           </label>
         </div>
         {textError ? <ErrorText>{textError}</ErrorText> : null}

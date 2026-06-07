@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 import { startTransition, useEffect, useState } from "react";
 import { autoSplitSegment } from "@/lib/text";
+import { isElevenLabsSourceAudioPath } from "@/lib/media";
 import type {
   EditableSegmentInput,
   PracticeAttempt,
@@ -43,6 +44,13 @@ export function SegmentEditor({
   const [associationPendingId, setAssociationPendingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
+  const usesElevenLabsSourceAudio = isElevenLabsSourceAudioPath(material.sourceAudioPath);
+  const sourceAudioTitle = usesElevenLabsSourceAudio
+    ? "ElevenLabs reference"
+    : "Original recording";
+  const sourceAudioDescription = usesElevenLabsSourceAudio
+    ? "Listen to the full generated passage while you check sentence clip boundaries."
+    : "Listen to the full upload while you check the transcript.";
 
   useEffect(() => {
     setSegments(
@@ -232,7 +240,11 @@ export function SegmentEditor({
                   throw new Error(payload.error || "Failed to save segments.");
                 }
 
-                setStatus("Segments saved. Reference audio will be refreshed where available.");
+                setStatus(
+                  usesElevenLabsSourceAudio
+                    ? "Segments saved. Source clip timing is ready for practice."
+                    : "Segments saved. Reference audio will be refreshed where available.",
+                );
                 startTransition(() => router.refresh());
               } catch (saveError) {
                 setError(
@@ -326,7 +338,7 @@ export function SegmentEditor({
           </p>
           <ul className="mt-4 space-y-3 text-sm leading-6 text-ink/75">
             <li>Prefer one practice-worthy sentence per row.</li>
-            <li>Keep punctuation in place so the TTS rhythm stays natural.</li>
+            <li>Keep punctuation in place so the reference rhythm stays natural.</li>
             <li>Use “Merge Next” for split ideas and “Auto Split” for long paragraphs.</li>
             <li>When the transcript looks right, save once and jump into practice mode.</li>
           </ul>
@@ -368,9 +380,9 @@ export function SegmentEditor({
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-brass">
               Source Audio
             </p>
-            <h2 className="mt-2 font-display text-2xl text-ink">Original recording</h2>
+            <h2 className="mt-2 font-display text-2xl text-ink">{sourceAudioTitle}</h2>
             <p className="mt-3 text-sm leading-6 text-ink/70">
-              Listen to the full upload while you check the transcript.
+              {sourceAudioDescription}
             </p>
             <audio controls src={sourceAudioUrl} className="mt-4" />
           </div>

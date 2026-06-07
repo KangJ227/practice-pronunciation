@@ -5,7 +5,14 @@ import { jsonError, jsonOk } from "@/lib/api";
 const schema = z.object({
   title: z.string().trim().optional().default(""),
   text: z.string().trim().min(1, "Text is required."),
+  referenceMode: z
+    .enum(["sentence-tts", "elevenlabs-source"])
+    .optional()
+    .default("sentence-tts"),
 });
+
+export const runtime = "nodejs";
+export const maxDuration = 300;
 
 export async function POST(request: Request) {
   try {
@@ -20,6 +27,7 @@ export async function POST(request: Request) {
     const input = schema.parse({
       title: String(formData.get("title") ?? ""),
       text,
+      referenceMode: String(formData.get("referenceMode") ?? "sentence-tts"),
     });
 
     const result = await createTextMaterialWorkflow(input);

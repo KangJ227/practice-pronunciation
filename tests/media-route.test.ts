@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveUserMediaStorageKey } from "@/lib/media";
+import { isElevenLabsSourceAudioPath, resolveUserMediaStorageKey } from "@/lib/media";
 
 describe("resolveUserMediaStorageKey", () => {
   it("keeps already scoped media keys unchanged", () => {
@@ -12,5 +12,12 @@ describe("resolveUserMediaStorageKey", () => {
     expect(resolveUserMediaStorageKey("attempts/seg-1/normalized/a.wav", "user-1")).toBe(
       "user-1/attempts/seg-1/normalized/a.wav",
     );
+  });
+
+  it("detects ElevenLabs full-passage source audio", () => {
+    expect(
+      isElevenLabsSourceAudioPath("user-1/materials/mat-1/elevenlabs-source/source.mp3"),
+    ).toBe(true);
+    expect(isElevenLabsSourceAudioPath("user-1/materials/mat-1/tts/source.mp3")).toBe(false);
   });
 });

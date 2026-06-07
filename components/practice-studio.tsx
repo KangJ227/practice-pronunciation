@@ -20,6 +20,7 @@ import {
   uploadToSignedStorage,
   type SignedStorageUpload,
 } from "@/lib/supabase/upload";
+import { isElevenLabsSourceAudioPath } from "@/lib/media";
 
 const mediaUrl = (storageKey: string | null | undefined) =>
   storageKey ? `/api/media/${storageKey}` : null;
@@ -47,6 +48,14 @@ const hasSourceClip = (segment: PracticeSegmentView) =>
 const getFirstUnreadSegmentId = (segments: PracticeSegmentView[]) =>
   segments.find((item) => !item.isRead)?.id ?? segments[0]?.id ?? null;
 
+const preferredPlaybackType = (practice: PracticeMaterialView): PlaybackType => {
+  const hasSourceAudio =
+    Boolean(practice.material.sourceAudioPath) && practice.segments.some(hasSourceClip);
+  const hasTtsAudio = practice.segments.some((item) => item.ttsAudioPath);
+
+  return hasSourceAudio && !hasTtsAudio ? "source" : "tts";
+};
+
 export function PracticeStudio({
   initialPractice,
 }: {
@@ -66,7 +75,9 @@ export function PracticeStudio({
   const [message, setMessage] = useState<string | null>(practice.material.statusDetail);
   const [loopClip, setLoopClip] = useState(false);
   const [showStarredOnly, setShowStarredOnly] = useState(false);
-  const [playbackType, setPlaybackType] = useState<PlaybackType>("tts");
+  const [playbackType, setPlaybackType] = useState<PlaybackType>(() =>
+    preferredPlaybackType(initialPractice),
+  );
   const [localAttemptPreview, setLocalAttemptPreview] = useState<LocalAttemptPreview | null>(null);
   const [selectedAttemptIds, setSelectedAttemptIds] = useState<Record<string, string>>({});
   const sourceAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -98,12 +109,23 @@ export function PracticeStudio({
   const sourceTypeAvailable =
     Boolean(practice.material.sourceAudioPath) && queueSegments.some(hasSourceClip);
   const ttsTypeAvailable = queueSegments.some((item) => item.ttsAudioPath);
+  const usesElevenLabsSourceAudio = isElevenLabsSourceAudioPath(practice.material.sourceAudioPath);
   const canPlaySelectedAudio =
     playbackType === "source"
       ? Boolean(segment && sourceTypeAvailable && hasSourceClip(segment))
       : Boolean(segment?.ttsAudioPath);
   const canPlayAllSelectedAudio =
     playbackType === "source" ? sourceTypeAvailable : ttsTypeAvailable;
+
+  useEffect(() => {
+    if (playbackType === "tts" && !ttsTypeAvailable && sourceTypeAvailable) {
+      setPlaybackType("source");
+    }
+
+    if (playbackType === "source" && !sourceTypeAvailable && ttsTypeAvailable) {
+      setPlaybackType("tts");
+    }
+  }, [playbackType, sourceTypeAvailable, ttsTypeAvailable]);
 
   const stopAudioElement = (audio: HTMLAudioElement | null) => {
     if (!audio) {
@@ -1098,11 +1120,13 @@ export function PracticeStudio({
               </TypeButton>
             </div>
           </div>
-          <div className="flex flex-wrap gap-3">
-            <ActionButton onClick={regenerateTts} disabled={regeneratingTts}>
-              {regeneratingTts ? "Regenerating..." : "Regenerate TTS"}
-            </ActionButton>
-          </div>
+          {!usesElevenLabsSourceAudio ? (
+            <div className="flex flex-wrap gap-3">
+              <ActionButton onClick={regenerateTts} disabled={regeneratingTts}>
+                {regeneratingTts ? "Regenerating..." : "Regenerate TTS"}
+              </ActionButton>
+            </div>
+          ) : null}
         </div>
 
         <div className="mt-6 rounded-[28px] border border-black/10 bg-white/75 p-5">

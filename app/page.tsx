@@ -1,5 +1,10 @@
 import Link from "next/link";
-import { appConfig, isAzureSpeechConfigured, isKimiConfigured } from "@/lib/config";
+import {
+  appConfig,
+  isAzureSpeechConfigured,
+  isElevenLabsConfigured,
+  isKimiConfigured,
+} from "@/lib/config";
 import { getDashboardMaterials } from "@/lib/services";
 import { CreateMaterialForms } from "@/components/create-material-forms";
 import { MaterialList } from "@/components/material-list";
@@ -26,7 +31,7 @@ export default async function HomePage() {
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-ink/70 md:text-lg">
               Upload a text passage or a single-speaker audio clip, review the sentence split,
-              generate reference TTS, then practice line by line with AI-backed feedback and a
+              generate reference audio, then practice line by line with AI-backed feedback and a
               memory of your recurring weak spots.
             </p>
             <div className="mt-6 flex flex-wrap gap-3 text-sm text-ink/80">
@@ -37,6 +42,10 @@ export default async function HomePage() {
               <StatusBadge
                 label={`Kimi ${isKimiConfigured() ? "ready" : "optional fallback mode"}`}
                 tone={isKimiConfigured() ? "green" : "amber"}
+              />
+              <StatusBadge
+                label={`ElevenLabs ${isElevenLabsConfigured() ? "ready" : "not configured"}`}
+                tone={isElevenLabsConfigured() ? "green" : "amber"}
               />
               <StatusBadge label={`Locale ${appConfig.locale}`} tone="neutral" />
             </div>
@@ -60,7 +69,7 @@ export default async function HomePage() {
               1. Import text or audio and let the app create initial sentence segments.
             </li>
             <li>
-              2. Review the split, merge or auto-split lines, then generate reference audio.
+              2. Review the split, merge or auto-split lines, then use TTS or source audio.
             </li>
             <li>
               3. Practice sentence by sentence with TTS, source clip replay, and upload or browser

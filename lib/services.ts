@@ -49,7 +49,9 @@ import {
   synthesizeSentenceAudio,
   transcribeAudioWithSdk,
 } from "@/lib/providers/azure";
+import { synthesizeElevenLabsPassageAudio } from "@/lib/providers/elevenlabs";
 import { analyzeAttemptWithKimi } from "@/lib/providers/kimi";
+import { isElevenLabsSourceAudioPath } from "@/lib/media";
 import type {
   EditableSegmentInput,
   FastTranscriptionResult,
@@ -97,6 +99,8 @@ type SavedAudioFile = {
   fullPath: string;
   size?: number;
 };
+
+type TextReferenceMode = "sentence-tts" | "elevenlabs-source";
 
 const normalizeSegments = (segments: EditableSegmentInput[]) =>
   segments
@@ -155,13 +159,24 @@ export const createTextMaterialWorkflow = async (input: {
   title: string;
   text: string;
   locale?: string;
+  referenceMode?: TextReferenceMode;
 }) => {
   const locale = input.locale ?? appConfig.locale;
   const sourceText = normalizeWhitespace(input.text);
   const sentences = splitFrenchSentences(sourceText);
+  const referenceMode = input.referenceMode ?? "sentence-tts";
 
   if (sentences.length === 0) {
     throw new Error("Please provide some French text to practice.");
+  }
+
+  if (referenceMode === "elevenlabs-source") {
+    return createElevenLabsSourceTextMaterial({
+      title: input.title,
+      sourceText,
+      locale,
+      fallbackTitle: inferTitle(sentences[0]),
+    });
   }
 
   const material = await createMaterial({
@@ -190,6 +205,51 @@ export const createTextMaterialWorkflow = async (input: {
     material: (await getMaterial(material.id))!,
     segments: await listSegmentsByMaterial(material.id),
   };
+};
+
+const createElevenLabsSourceTextMaterial = async (input: {
+  title: string;
+  sourceText: string;
+  locale: string;
+  fallbackTitle: string;
+}) => {
+  const material = await createMaterial({
+    kind: "text",
+    locale: input.locale,
+    title: input.title.trim() || input.fallbackTitle,
+    sourceText: input.sourceText,
+    status: "draft",
+    statusDetail: "Generating ElevenLabs v2 source audio.",
+  });
+
+  try {
+    const source = await synthesizeElevenLabsPassageAudio(input.sourceText, input.locale);
+    const sourceAudioPath = await writeBuffer(
+      `materials/${material.id}/elevenlabs-source`,
+      "source.mp3",
+      source.audioBuffer,
+    );
+    const segments = await replaceSegments(material.id, source.segments);
+
+    await updateMaterial(material.id, {
+      sourceAudioPath,
+      status: "needs-review",
+      statusDetail:
+        "ElevenLabs v2 source audio is ready. Review the source clips before practice.",
+    });
+
+    return {
+      material: (await getMaterial(material.id))!,
+      segments,
+    };
+  } catch (error) {
+    await updateMaterial(material.id, {
+      status: "error",
+      statusDetail:
+        error instanceof Error ? error.message : "ElevenLabs source audio generation failed.",
+    }).catch(() => undefined);
+    throw error;
+  }
 };
 
 export const createAudioMaterialWorkflow = async (input: {
@@ -460,7 +520,9 @@ export const updateMaterialSegmentsWorkflow = async (
     statusDetail: "Segments saved. You can start practice now.",
   });
 
-  await generateReferenceAudio((await getMaterial(materialId))!, persisted);
+  if (!isElevenLabsSourceAudioPath(material.sourceAudioPath)) {
+    await generateReferenceAudio((await getMaterial(materialId))!, persisted);
+  }
 
   return {
     material: (await getMaterial(materialId))!,
@@ -472,6 +534,10 @@ export const regenerateMaterialTtsWorkflow = async (materialId: string) => {
   const material = await getMaterial(materialId);
   if (!material) {
     throw new Error("Material not found.");
+  }
+
+  if (isElevenLabsSourceAudioPath(material.sourceAudioPath)) {
+    throw new Error("This material uses ElevenLabs source audio, so per-sentence TTS is disabled.");
   }
 
   const segments = await listSegmentsByMaterial(materialId);

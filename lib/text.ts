@@ -98,6 +98,92 @@ export const splitFrenchSentences = (input: string) => {
   return sentences;
 };
 
+export type SentenceSpan = {
+  text: string;
+  startIndex: number;
+  endIndex: number;
+};
+
+const trimSpan = (text: string, startIndex: number, endIndex: number) => {
+  let start = startIndex;
+  let end = endIndex;
+
+  while (start < end && /\s/.test(text[start] ?? "")) {
+    start += 1;
+  }
+
+  while (end > start && /\s/.test(text[end - 1] ?? "")) {
+    end -= 1;
+  }
+
+  return { start, end };
+};
+
+export const splitFrenchSentenceSpans = (input: string): SentenceSpan[] => {
+  const text = normalizeWhitespace(input);
+
+  if (!text) {
+    return [];
+  }
+
+  const spans: SentenceSpan[] = [];
+  let buffer = "";
+  let bufferStart = 0;
+
+  const pushSpan = (endIndex: number) => {
+    const { start, end } = trimSpan(text, bufferStart, endIndex);
+    const sentence = normalizeSentenceText(text.slice(start, end));
+
+    if (sentence) {
+      spans.push({
+        text: sentence,
+        startIndex: start,
+        endIndex: end,
+      });
+    }
+
+    buffer = "";
+    bufferStart = endIndex;
+  };
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    buffer += char;
+
+    if (!".!?…".includes(char)) {
+      continue;
+    }
+
+    if (char === "." && (isDecimalPoint(text, index) || endsWithAbbreviation(buffer))) {
+      continue;
+    }
+
+    const nextChunk = text.slice(index + 1);
+    const nextVisible = nextChunk.match(/[^\s"»)\]]/)?.[0] ?? "";
+
+    if ("!?…".includes(char) && continuesDialogueTag(text, index)) {
+      continue;
+    }
+
+    const shouldBreak =
+      !nextVisible ||
+      /[A-ZÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸ«"(\[]/.test(nextVisible) ||
+      char !== ".";
+
+    if (!shouldBreak) {
+      continue;
+    }
+
+    pushSpan(index + 1);
+  }
+
+  if (buffer.trim()) {
+    pushSpan(text.length);
+  }
+
+  return spans;
+};
+
 export const tokenizeFrench = (text: string) => {
   const matches = text.match(/[\p{L}\p{M}][\p{L}\p{M}'’-]*/gu) ?? [];
   return matches.map((token) => ({
