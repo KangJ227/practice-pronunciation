@@ -1,6 +1,6 @@
 # Atelier de Prononciation
 
-A private French pronunciation practice web app built with Next.js, Supabase, Azure Speech, and Kimi.
+A personal French pronunciation practice web app built with Next.js, Supabase, Azure Speech, and Kimi.
 
 ## What it does
 
@@ -18,7 +18,7 @@ A private French pronunciation practice web app built with Next.js, Supabase, Az
 - Next.js App Router
 - TypeScript
 - Tailwind CSS
-- Supabase Postgres and private Storage with app-managed username/password sessions
+- Supabase Postgres and private Storage with one default app user
 - Azure Speech REST + SDK
 - ElevenLabs Text to Speech with timing
 - Kimi Chat Completions API (`https://api.moonshot.cn/v1`)
@@ -40,8 +40,9 @@ A private French pronunciation practice web app built with Next.js, Supabase, Az
 NEXT_PUBLIC_SUPABASE_URL=
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
-APP_SESSION_SECRET=
 SUPABASE_STORAGE_BUCKET=practice-media
+APP_DEFAULT_USER_ID=
+APP_DEFAULT_USERNAME=jing
 ```
 
 5. Fill in `AZURE_SPEECH_KEY` and `AZURE_SPEECH_REGION`.
@@ -61,26 +62,26 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Accounts
+## Default app user
 
-The app uses local username/password accounts stored in Supabase tables. Create an
-account directly in SQL:
+The app does not show a login screen. It opens directly with a default app user
+stored in Supabase tables. Create that user directly in SQL:
 
 ```sql
 insert into public.app_users (username, password_hash)
 values ('jing', extensions.crypt('change-this-password', extensions.gen_salt('bf')));
 ```
 
-Usernames must be lowercase. Passwords are checked with Postgres `pgcrypto`
-`crypt()`, so do not store plaintext passwords.
+Usernames must be lowercase. `password_hash` is still required by the existing
+schema, but it is not used by the app because login is disabled.
 
-If you already have materials from the previous Supabase Auth login, attach the
-new login to that existing `user_id` instead:
+If you already have materials from the previous login flow, attach the default
+user to that existing `user_id` instead:
 
 ```sql
 update public.app_users
 set username = 'jing',
-    password_hash = extensions.crypt('change-this-password', extensions.gen_salt('bf')),
+    password_hash = extensions.crypt('unused-login-disabled', extensions.gen_salt('bf')),
     is_active = true
 where id = (
   select user_id
@@ -90,12 +91,16 @@ where id = (
 );
 ```
 
+Set `APP_DEFAULT_USER_ID` to pin the app to a specific user. If that is not set,
+`APP_DEFAULT_USERNAME` is used. If neither is set, the app falls back to the user
+who owns the most recent material, then to the first active app user.
+
 ## Important behavior
 
 - Text materials still work without Azure credentials, but TTS generation is skipped.
 - Text materials can optionally use ElevenLabs v2 to generate one full-passage MP3 with sentence timing. This audio is saved as source audio, so practice mode uses Source clips instead of per-sentence TTS.
 - Audio materials are saved even without Azure credentials, but transcription stays unavailable until Azure Speech is configured.
-- The app is private: pages, APIs, and media require a valid app account session.
+- Login is disabled: pages, APIs, and media use the default app user instead of a session.
 - Practice attempts are always stored; if Azure or Kimi is unavailable, the app falls back to degraded feedback instead of dropping the upload.
 - Each saved attempt also writes feedback artifacts to Supabase Storage as `.json` and `.md`.
 - Weak-word highlighting appears after repeated low scores, or after a single omission/insertion error.
@@ -115,8 +120,9 @@ is the single source for Vercel builds:
 NEXT_PUBLIC_SUPABASE_URL
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SERVICE_ROLE_KEY
-APP_SESSION_SECRET
 SUPABASE_STORAGE_BUCKET=practice-media
+APP_DEFAULT_USER_ID
+APP_DEFAULT_USERNAME=jing
 FFMPEG_PATH
 AZURE_SPEECH_KEY
 AZURE_SPEECH_REGION
