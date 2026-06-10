@@ -472,7 +472,7 @@ export const shouldRetryWithoutLocales = (error: unknown) => {
 
 export const shouldFallbackToSdkTranscription = (error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
-  return /InvalidLocale|The specified locale is not supported|InvalidModel|The specified model is not supported/i.test(
+  return /InvalidLocale|The specified locale is not supported|InvalidModel|The specified model is not supported|Fast transcription is not supported in this region/i.test(
     message,
   );
 };

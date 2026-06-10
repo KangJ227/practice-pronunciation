@@ -76,6 +76,16 @@ describe("shouldFallbackToSdkTranscription", () => {
     ).toBe(true);
   });
 
+  it("falls back when fast transcription is unavailable in the Azure region", () => {
+    expect(
+      shouldFallbackToSdkTranscription(
+        new Error(
+          'Azure transcription failed: 400 {"code":"InvalidRequest","message":"Fast transcription is not supported in this region."}',
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("does not hide unrelated provider failures", () => {
     expect(
       shouldFallbackToSdkTranscription(
